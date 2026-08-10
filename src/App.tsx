@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { SYSTEM_ACCESS_URL } from './config'
 
 const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-automations-logo-transparent.png`
@@ -50,7 +50,7 @@ function AccessButton({ compact = false }: { compact?: boolean }) {
   if (SYSTEM_ACCESS_URL) {
     return <a className={className} href={SYSTEM_ACCESS_URL}>Acessar sistema <span aria-hidden="true">↗</span></a>
   }
-  return <button className={className} type="button" disabled aria-label="Acesso ao sistema será disponibilizado em breve">Acessar sistema <span aria-hidden="true">↗</span></button>
+  return <a className={className} href="#acesso">Acessar sistema <span aria-hidden="true">↗</span></a>
 }
 
 function FlowVisual() {
@@ -66,7 +66,7 @@ function FlowVisual() {
   )
 }
 
-function App() {
+function LandingPage() {
   return (
     <main>
       <header className="site-header">
@@ -79,7 +79,7 @@ function App() {
           <a href="#planos">Planos</a>
           <a href="#contato">Contato</a>
         </nav>
-        <a className="header-cta" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
+        <AccessButton compact />
       </header>
 
       <section id="inicio" className="hero section-shell">
@@ -176,6 +176,147 @@ function App() {
       <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automações empresariais que fazem sentido.</span><span>© {new Date().getFullYear()} Solutte Automations</span></footer>
     </main>
   )
+}
+
+type AuthStep = 'login' | 'register' | 'payment' | 'pending'
+
+function PortalBrand() {
+  return <img className="portal-brand" src={LOGO_ASSET} alt="Solutte Automations" />
+}
+
+function BackToLanding() {
+  return <a className="portal-back" href="#inicio"><span aria-hidden="true">←</span> Voltar ao site</a>
+}
+
+function AuthPortal() {
+  const [step, setStep] = useState<AuthStep>('login')
+
+  const register = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setStep('payment')
+  }
+
+  if (step === 'pending') {
+    return (
+      <main className="portal-page portal-page--centered">
+        <BackToLanding />
+        <section className="status-card" aria-labelledby="pending-title">
+          <div className="status-card__icon status-card__icon--waiting" aria-hidden="true">◷</div>
+          <p className="portal-eyebrow">Solicitação recebida</p>
+          <h1 id="pending-title">Seu acesso está aguardando liberação.</h1>
+          <p>Recebemos seu cadastro. Assim que o pagamento e a aprovação administrativa forem confirmados, você receberá as próximas instruções no e-mail informado.</p>
+          <button className="portal-link-button" type="button" onClick={() => setStep('login')}>Voltar para o acesso</button>
+        </section>
+      </main>
+    )
+  }
+
+  return (
+    <main className="portal-page">
+      <div className="portal-intro">
+        <BackToLanding />
+        <PortalBrand />
+        <div>
+          <p className="portal-eyebrow">Área do cliente</p>
+          <h1>Automação que<br /><em>segue com você.</em></h1>
+          <p>Centralize sua operação, acompanhe o que importa e dê espaço para o seu time avançar.</p>
+        </div>
+        <div className="portal-intro__flow" aria-hidden="true"><span /><span /><span /><i /><i /></div>
+      </div>
+
+      <section className="auth-panel" aria-live="polite">
+        {step === 'login' && <>
+          <div className="auth-panel__heading"><p className="portal-eyebrow">Bem-vindo de volta</p><h2>Acesse sua conta</h2><p>Use os dados cadastrados para entrar na plataforma.</p></div>
+          <form className="auth-form" onSubmit={(event) => { event.preventDefault(); window.location.hash = '#admin' }}>
+            <label>E-mail<input type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
+            <label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" required /></label>
+            <div className="auth-form__row"><label className="check-label"><input type="checkbox" /> Manter conectado</label><button type="button" className="text-button">Esqueci minha senha</button></div>
+            <button className="portal-primary-button" type="submit">Entrar na plataforma <span aria-hidden="true">→</span></button>
+          </form>
+          <p className="auth-switch">Ainda não possui uma conta? <button type="button" onClick={() => setStep('register')}>Cadastre-se</button></p>
+          <div className="demo-note"><span aria-hidden="true">◇</span><div><strong>Ambiente de demonstração</strong><p>Nesta versão, qualquer acesso abre a prévia administrativa. O backend vai definir usuários, senhas e permissões reais.</p><a href="#admin">Visualizar painel administrativo →</a></div></div>
+        </>}
+
+        {step === 'register' && <>
+          <div className="auth-panel__heading"><p className="portal-eyebrow">Comece agora</p><h2>Crie sua conta</h2><p>Cadastre sua empresa para iniciar a solicitação de acesso.</p></div>
+          <form className="auth-form" onSubmit={register}>
+            <label>Seu nome<input type="text" autoComplete="name" placeholder="Como podemos chamar você?" required /></label>
+            <label>E-mail profissional<input type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
+            <label>Empresa<input type="text" autoComplete="organization" placeholder="Nome da sua empresa" required /></label>
+            <label>Crie uma senha<input type="password" autoComplete="new-password" placeholder="Mínimo de 8 caracteres" minLength={8} required /></label>
+            <label className="check-label check-label--terms"><input type="checkbox" required /> Li e concordo com os termos de uso e a política de privacidade.</label>
+            <button className="portal-primary-button" type="submit">Continuar para pagamento <span aria-hidden="true">→</span></button>
+          </form>
+          <p className="auth-switch">Já possui uma conta? <button type="button" onClick={() => setStep('login')}>Acessar</button></p>
+        </>}
+
+        {step === 'payment' && <>
+          <div className="auth-panel__heading"><p className="portal-eyebrow">Próxima etapa</p><h2>Ative sua solicitação</h2><p>O pagamento será integrado nesta área antes da liberação do seu acesso.</p></div>
+          <div className="payment-placeholder">
+            <div className="payment-placeholder__top"><span className="payment-placeholder__lock" aria-hidden="true">⌁</span><span>Pagamento seguro</span></div>
+            <div><strong>Plano Solutte Automations</strong><p>Valor e meios de pagamento serão definidos na próxima etapa.</p></div>
+            <span className="payment-placeholder__tag">Em breve</span>
+          </div>
+          <button className="portal-primary-button" type="button" onClick={() => setStep('pending')}>Confirmar solicitação <span aria-hidden="true">→</span></button>
+          <button className="portal-secondary-button" type="button" onClick={() => setStep('register')}>Voltar ao cadastro</button>
+        </>}
+      </section>
+    </main>
+  )
+}
+
+const users = [
+  ['Marina Costa', 'marina@solutte.com.br', 'Administradora', 'Ativo'],
+  ['Carlos Mendes', 'carlos@empresa.com.br', 'Operador', 'Ativo'],
+  ['Ana Ribeiro', 'ana@empresa.com.br', 'Gestora', 'Aguardando'],
+  ['Rafael Souza', 'rafael@empresa.com.br', 'Operador', 'Ativo'],
+]
+
+function AdminDashboard() {
+  return (
+    <main className="admin-page">
+      <aside className="admin-sidebar">
+        <a href="#inicio" className="admin-sidebar__brand"><PortalBrand /></a>
+        <nav aria-label="Navegação administrativa">
+          <a className="is-active" href="#admin"><span>▦</span> Visão geral</a>
+          <a href="#admin-users"><span>♙</span> Usuários</a>
+          <a href="#admin-tokens"><span>◌</span> Consumo de tokens</a>
+          <a href="#admin-agents"><span>✦</span> Agentes</a>
+          <a href="#admin-logs"><span>⇩</span> Logs de execução</a>
+        </nav>
+        <div className="admin-profile"><span>MC</span><div><b>Marina Costa</b><small>Administradora</small></div></div>
+      </aside>
+      <section className="admin-content">
+        <header className="admin-header"><div><p className="portal-eyebrow">Painel administrativo</p><h1>Visão geral</h1></div><a className="admin-exit" href="#inicio">Sair <span aria-hidden="true">↗</span></a></header>
+        <section className="admin-metrics" aria-label="Indicadores principais">
+          <article><span>Usuários ativos</span><strong>24</strong><small>+4 este mês</small></article>
+          <article><span>Tokens consumidos</span><strong>1,28 mi</strong><small>de 2 mi disponíveis</small></article>
+          <article><span>Agentes ativos</span><strong>06</strong><small>2 em desenvolvimento</small></article>
+          <article><span>Execuções hoje</span><strong>382</strong><small>98,7% concluídas</small></article>
+        </section>
+        <div className="admin-grid">
+          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><button type="button">+ Novo usuário</button></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{users.map(([name, email, role, status]) => <div className="user-row" key={email}><span><b>{name}</b><small>{email}</small></span><span>{role}</span><span className={status === 'Ativo' ? 'status status--active' : 'status'}>{status}</span></div>)}</div><button className="card-text-button" type="button">Ver todos os usuários →</button></section>
+          <section className="admin-card" id="admin-tokens"><div className="admin-card__heading"><div><h2>Uso de tokens</h2><p>Consumo consolidado do período.</p></div><button type="button">Relatório</button></div><div className="token-total"><strong>1.284.650</strong><span>tokens utilizados em agosto</span></div><div className="bar-chart" aria-label="Gráfico de consumo de tokens por semana"><i style={{ height: '37%' }} /><i style={{ height: '56%' }} /><i style={{ height: '44%' }} /><i style={{ height: '76%' }} /><i style={{ height: '91%' }} /></div><div className="chart-labels"><span>Sem. 1</span><span>Sem. 2</span><span>Sem. 3</span><span>Sem. 4</span><span>Hoje</span></div></section>
+          <section className="admin-card" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Automação em operação.</p></div><button type="button">Gerenciar</button></div><div className="agent-list"><div><span className="agent-icon">◈</span><b>Triagem de solicitações<small>Ativo · 124 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--red">✦</span><b>Conferência documental<small>Ativo · 86 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--light">+</span><b>Novo agente<small>Configure uma nova automação</small></b><i>→</i></div></div></section>
+          <section className="admin-card" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade recente da plataforma.</p></div><button className="download-button" type="button">⇩ Baixar logs</button></div><div className="log-list"><p><span className="log-success">●</span> Agente “Triagem” concluiu a análise <time>há 2 min</time></p><p><span className="log-success">●</span> Processo #S-02914 foi atualizado <time>há 12 min</time></p><p><span className="log-info">●</span> Novo cadastro aguarda aprovação <time>há 24 min</time></p></div><button className="card-text-button" type="button">Abrir central de logs →</button></section>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function App() {
+  const [route, setRoute] = useState(() => window.location.hash)
+
+  useEffect(() => {
+    const syncRoute = () => setRoute(window.location.hash)
+    window.addEventListener('hashchange', syncRoute)
+    return () => window.removeEventListener('hashchange', syncRoute)
+  }, [])
+
+  if (route === '#acesso') return <AuthPortal />
+  if (route === '#admin') return <AdminDashboard />
+  return <LandingPage />
 }
 
 export default App

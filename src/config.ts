@@ -1,2 +1,5 @@
-/** Defina a URL do ambiente da Solutte Automations quando a tela de acesso estiver disponível. */
+/**
+ * URL externa futura do sistema. Enquanto for `null`, o acesso abre a área
+ * interna demonstrativa desta aplicação, em `#acesso`.
+ */
 export const SYSTEM_ACCESS_URL: string | null = null
