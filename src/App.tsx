@@ -423,6 +423,9 @@ function ModuleVisual({ className }: { className: string }) {
 
 function ModuleHub() {
   const session = getSession()
+  const openOrganizza = () => {
+    if (ORGANIZZA_URL) window.location.assign(ORGANIZZA_URL)
+  }
 
   if (!session) return <main className="portal-page portal-page--centered"><BackToLanding /><section className="status-card"><p className="portal-eyebrow">Acesso restrito</p><h1>Faça login para acessar seus módulos.</h1><a className="portal-primary-button" href="#acesso">Ir para o acesso</a></section></main>
 
@@ -437,7 +440,7 @@ function ModuleHub() {
     <section className="modules-shell">
       <div className="modules-hero"><div><p className="portal-eyebrow">Meu espaço Solutte</p><h1>Olá, {session.user.name.split(' ')[0]}.</h1><p>Escolha um módulo para continuar. Novos produtos aparecerão aqui assim que estiverem disponíveis para sua conta.</p></div><span aria-hidden="true">✦</span></div>
       <section className="module-grid" aria-label="Módulos Solutte">
-        {modules.map((module, index) => <article className={`module-card ${module.className}`} key={module.name}>
+        {modules.map((module, index) => <article className={`module-card ${module.className}${module.available && ORGANIZZA_URL ? ' module-card--link' : ''}`} key={module.name} role={module.available && ORGANIZZA_URL ? 'link' : undefined} tabIndex={module.available && ORGANIZZA_URL ? 0 : undefined} onClick={module.available && ORGANIZZA_URL ? openOrganizza : undefined} onKeyDown={module.available && ORGANIZZA_URL ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openOrganizza() } } : undefined}>
           <div className="module-card__content"><span className="module-card__number">0{index + 1}</span><p>{module.eyebrow}</p><h2>{module.name}</h2><span className={module.available ? 'module-status module-status--available' : 'module-status'}>{module.available ? 'Disponível' : 'Em breve'}</span><p className="module-card__description">{module.description}</p>{module.available && ORGANIZZA_URL ? <a className="module-open-link" href={ORGANIZZA_URL}>Abrir módulo <span aria-hidden="true">→</span></a> : <span className="module-open-link module-open-link--disabled">{module.available ? 'Preparando acesso' : 'Em desenvolvimento'}</span>}</div>
           <ModuleVisual className={module.className} />
         </article>)}
