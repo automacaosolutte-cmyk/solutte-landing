@@ -2,6 +2,7 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'rea
 import { API_URL, ORGANIZZA_URL, SYSTEM_ACCESS_URL } from './config'
 
 const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-tech-mark.png`
+const FULL_LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-full-lockup-cropped.png`
 
 type RevealProps = {
   children: ReactNode
@@ -39,9 +40,8 @@ function Reveal({ children, className = '', delay = 0 }: RevealProps) {
 
 function SolutteLogo() {
   return (
-    <a className="brand" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial">
-      <img className="brand__image" src={LOGO_ASSET} alt="" />
-      <span className="brand__lockup"><b>Solutte</b><small>Automações empresariais</small></span>
+    <a className="brand brand--full" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial">
+      <img className="brand__full-lockup" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" />
     </a>
   )
 }
@@ -72,7 +72,7 @@ function LandingPage() {
 
       <section id="inicio" className="hero section-shell">
         <div className="hero__copy">
-          <div className="hero-brand-lockup" aria-label="Solutte Automações Empresariais"><img src={LOGO_ASSET} alt="" /><div><b>Solutte</b><small>Automações empresariais</small></div></div>
+          <div className="hero-brand-lockup"><img src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></div>
           <p className="eyebrow">Automações empresariais</p>
           <h1>Inteligência que <em>simplifica</em> processos.</h1>
           <p className="hero__description">A Solutte Automações Empresariais conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
@@ -138,7 +138,7 @@ function LandingPage() {
         <div className="product-grid">
           <Reveal className="product-card product-card--organizza" delay={40}>
             <div className="card-copy"><span className="card-kicker">Solutte Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
-            <div className="organizza-visual" aria-hidden="true"><img src="/assets/solutte-tech-mark.png" alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
+            <div className="organizza-visual" aria-hidden="true"><img src={FULL_LOGO_ASSET} alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
           </Reveal>
           <Reveal className="product-card product-card--accounting" delay={110}>
             <div className="card-copy"><span className="card-kicker">Solutte Contábil</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
@@ -222,7 +222,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 function PortalBrand() {
-  return <span className="portal-lockup"><img className="portal-brand" src={LOGO_ASSET} alt="" /><span><b>Solutte</b><small>Automações empresariais</small></span></span>
+  return <span className="portal-lockup"><img className="portal-brand" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></span>
 }
 
 function BackToLanding() {
@@ -403,7 +403,7 @@ function LogsPanel({ logs, onDownload }: { logs: Log[], onDownload: () => void }
 const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
 
 function ModuleVisual({ className }: { className: string }) {
-  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><img src="/assets/solutte-tech-mark.png" alt="" /><span>⌕ Izza</span></div>
+  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><img src={FULL_LOGO_ASSET} alt="" /><span>⌕ Izza</span></div>
   if (className === 'module-card--accounting') return <div className="module-visual module-visual--accounting" aria-hidden="true"><span>F</span><span>C</span><span>DP</span><span>+</span></div>
   if (className === 'module-card--mei') return <div className="module-visual module-visual--mei" aria-hidden="true"><span>MEI</span><i>→</i><span>DAS</span></div>
   return <div className="module-visual module-visual--personal" aria-hidden="true"><span>✓ Lista da semana</span><span>○ Para comprar</span></div>
