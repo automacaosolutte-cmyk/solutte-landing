@@ -1,0 +1,10 @@
+<svg width="244" height="54" viewBox="0 0 244 54" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(4 4)">
+    <rect x="2" y="2" width="42" height="42" rx="13" fill="#1045D7" transform="rotate(-35 23 23)"/>
+    <path d="M30.2 10.2C25.8 6.9 18.5 7.1 14.4 11.2C10.2 15.4 10.4 22.2 14.9 25.4L25.7 33.1C28.1 34.8 28.3 38.2 26.2 40.4C23.9 42.7 20.1 42.8 17.7 40.7L11.5 35.3" stroke="white" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="41.4" cy="5.8" r="4.6" fill="#1045D7"/>
+    <circle cx="4.7" cy="39.2" r="4.6" fill="#B90925"/>
+    <path d="M30 33.5L37.1 40.6" stroke="#B90925" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <text x="62" y="36" fill="#001947" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="800" letter-spacing="4">SOLUTTE</text>
+</svg>
