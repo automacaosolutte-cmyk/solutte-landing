@@ -1,6 +1,6 @@
-# Solutte Automations Landing Page
+# Solutte Automações Empresariais
 
-Landing page institucional da Solutte Automations, construída com React e Vite.
+Landing page institucional da Solutte Automações Empresariais, construída com React e Vite.
 
 ## Desenvolvimento
 

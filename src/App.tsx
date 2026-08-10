@@ -39,7 +39,7 @@ function Reveal({ children, className = '', delay = 0 }: RevealProps) {
 
 function SolutteLogo() {
   return (
-    <a className="brand" href="#inicio" aria-label="Solutte Automations — página inicial">
+    <a className="brand" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial">
       <img className="brand__image" src={LOGO_ASSET} alt="" />
       <span className="brand__lockup"><b>Solutte</b><small>Automações empresariais</small></span>
     </a>
@@ -75,7 +75,7 @@ function LandingPage() {
           <div className="hero-brand-lockup" aria-label="Solutte Automações Empresariais"><img src={LOGO_ASSET} alt="" /><div><b>Solutte</b><small>Automações empresariais</small></div></div>
           <p className="eyebrow">Automações empresariais</p>
           <h1>Inteligência que <em>simplifica</em> processos.</h1>
-          <p className="hero__description">A Solutte Automations conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
+          <p className="hero__description">A Solutte Automações Empresariais conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
           <div className="hero__actions">
             <a className="primary-link" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
             <a className="secondary-link" href="#como-funciona"><span aria-hidden="true">▷</span> Ver como funciona</a>
@@ -114,7 +114,7 @@ function LandingPage() {
           <div className="process-pill process-pill--one"><span className="pill-icon">+</span> Nova demanda</div>
           <div className="process-pill process-pill--two"><span className="pill-icon pill-icon--blue">↗</span> Em andamento</div>
           <div className="process-pill process-pill--three"><span className="pill-icon pill-icon--red">✓</span> Finalizado</div>
-          <div className="process-core"><span>Solutte<br />Automations</span><b>Fluxo<br />inteligente</b></div>
+          <div className="process-core"><span>Solutte<br />Automações Empresariais</span><b>Fluxo<br />inteligente</b></div>
           <span className="travel-dot travel-dot--one" /><span className="travel-dot travel-dot--two" />
         </div>
       </section>
@@ -165,7 +165,7 @@ function LandingPage() {
         </Reveal>
       </section>
 
-      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automações empresariais que fazem sentido.</span><span>© {new Date().getFullYear()} Solutte Automations</span></footer>
+      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automações empresariais que fazem sentido.</span><span>© {new Date().getFullYear()} Solutte Automações Empresariais</span></footer>
     </main>
   )
 }
@@ -332,7 +332,7 @@ function AuthPortal() {
           <div className="auth-panel__heading"><p className="portal-eyebrow">Próxima etapa</p><h2>Ative sua solicitação</h2><p>O pagamento será integrado nesta área antes da liberação do seu acesso.</p></div>
           <div className="payment-placeholder">
             <div className="payment-placeholder__top"><span className="payment-placeholder__lock" aria-hidden="true">⌁</span><span>Pagamento seguro</span></div>
-            <div><strong>Plano Solutte Automations</strong><p>Valor e meios de pagamento serão definidos na próxima etapa.</p></div>
+            <div><strong>Plano Solutte Automações Empresariais</strong><p>Valor e meios de pagamento serão definidos na próxima etapa.</p></div>
             <span className="payment-placeholder__tag">Em breve</span>
           </div>
           <button className="portal-primary-button" type="button" onClick={() => setStep('pending')}>Confirmar solicitação <span aria-hidden="true">→</span></button>
