@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react'
 import { SYSTEM_ACCESS_URL } from './config'
 
-const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo-transparent.png`
+const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-automations-logo-transparent.png`
 
 type RevealProps = {
   children: ReactNode
@@ -39,8 +39,8 @@ function Reveal({ children, className = '', delay = 0 }: RevealProps) {
 
 function SolutteLogo() {
   return (
-    <a className="brand" href="#inicio" aria-label="Solutte — página inicial">
-      <img className="brand__image" src={LOGO_ASSET} alt="Solutte" />
+    <a className="brand" href="#inicio" aria-label="Solutte Automations — página inicial">
+      <img className="brand__image" src={LOGO_ASSET} alt="Solutte Automations" />
     </a>
   )
 }
@@ -55,7 +55,7 @@ function AccessButton({ compact = false }: { compact?: boolean }) {
 
 function FlowVisual() {
   return (
-    <div className="flow-visual flow-visual--brand" aria-label="Logotipo Solutte e representação de uma operação automatizada" role="img">
+    <div className="flow-visual flow-visual--brand" aria-label="Logotipo Solutte Automations e representação de uma operação automatizada" role="img">
       <div className="hero-dots" />
       <div className="hero-logo-halo" />
       <img className="flow-brand" src={LOGO_ASSET} alt="" aria-hidden="true" />
@@ -84,9 +84,9 @@ function App() {
 
       <section id="inicio" className="hero section-shell">
         <div className="hero__copy">
-          <p className="eyebrow">Automação inteligente para empresas</p>
+          <p className="eyebrow">Automações empresariais</p>
           <h1>Inteligência que<br /><em>simplifica</em> processos.</h1>
-          <p className="hero__description">A Solutte conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
+          <p className="hero__description">A Solutte Automations conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
           <div className="hero__actions">
             <a className="primary-link" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
             <a className="secondary-link" href="#como-funciona"><span aria-hidden="true">▷</span> Ver como funciona</a>
@@ -126,7 +126,7 @@ function App() {
           <div className="process-pill process-pill--one"><span className="pill-icon">+</span> Nova demanda</div>
           <div className="process-pill process-pill--two"><span className="pill-icon pill-icon--blue">↗</span> Em andamento</div>
           <div className="process-pill process-pill--three"><span className="pill-icon pill-icon--red">✓</span> Finalizado</div>
-          <div className="process-core"><span>Solutte</span><b>Fluxo<br />inteligente</b></div>
+          <div className="process-core"><span>Solutte<br />Automations</span><b>Fluxo<br />inteligente</b></div>
           <span className="travel-dot travel-dot--one" /><span className="travel-dot travel-dot--two" />
         </div>
       </section>
@@ -173,7 +173,7 @@ function App() {
         </Reveal>
       </section>
 
-      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automação que faz sentido.</span><span>© {new Date().getFullYear()} Solutte</span></footer>
+      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automações empresariais que fazem sentido.</span><span>© {new Date().getFullYear()} Solutte Automations</span></footer>
     </main>
   )
 }
