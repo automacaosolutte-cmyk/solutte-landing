@@ -5,3 +5,7 @@ dist/
 .image-work/
 server/.env
 server/data/
+.env.local
+.vercel/
+.vercel
+.env*

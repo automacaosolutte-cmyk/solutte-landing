@@ -10,7 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@libsql/client": "^0.15.15",
     "@vitejs/plugin-react": "latest",
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
     "vite": "latest",
     "react": "latest",
     "react-dom": "latest"

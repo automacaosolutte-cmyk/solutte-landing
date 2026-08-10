@@ -207,7 +207,6 @@ function getSession(): { token: string, user: ApiUser } | null {
 }
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (!API_URL) throw new Error('A API ainda não foi configurada para esta publicação.')
   const session = getSession()
   const headers = new Headers(options.headers)
   headers.set('Content-Type', 'application/json')
