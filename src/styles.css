@@ -21,7 +21,7 @@ button { font: inherit; }
 
 .site-header { position: fixed; z-index: 20; top: 0; left: 50%; display: flex; align-items: center; justify-content: space-between; width: min(1220px, calc(100% - 40px)); padding: 16px 20px; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.75); border-top: 0; border-radius: 0 0 18px 18px; background: rgba(251,251,250,.8); box-shadow: 0 8px 30px rgba(0,25,71,.05); backdrop-filter: blur(14px); }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--ink); }
-.brand__image { display: block; width: 160px; height: auto; }
+.brand__image { display: block; width: 76px; height: auto; }
 
 .access-button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 49px; padding: 0 20px; border: 0; border-radius: 999px; color: white; background: var(--ink); box-shadow: 0 7px 18px rgba(0,25,71,.18); font-size: .87rem; font-weight: 600; transition: transform .25s ease, box-shadow .25s ease; }
 .access-button:disabled { cursor: default; }
@@ -84,7 +84,7 @@ h2 { max-width: 850px; margin-bottom: 0; letter-spacing: -.06em; font-size: clam
 }
 
 @media (max-width: 520px) {
-  .brand__image { width: 127px; }
+  .brand__image { width: 66px; }
   .site-header { width: calc(100% - 24px); padding: 13px 12px; border-radius: 0 0 13px 13px; }.brand { gap: 6px; }.brand-mark { transform: scale(.78) rotate(-35deg); }.brand-name { font-size: .76rem; }.access-button--compact { padding: 0 11px; font-size: .68rem; }.access-button--compact span { display: none; }.section-shell { width: calc(100% - 40px); }.hero { min-height: 748px; }.hero__description { font-size: .95rem; }.hero__actions { align-items: flex-start; flex-direction: column; gap: 19px; }.flow-visual { margin-left: -41px; transform: scale(.62) translateX(35px); }.statement h2, .benefits h2, .products h2, .closing h2 { font-size: 2.7rem; }.process-stage { height: 420px; }.process-core { top: 176px; width: 124px; height: 124px; }.process-core b { font-size: .9rem; }.process-pill { padding: 9px 10px; font-size: .61rem; }.process-pill--one { top: 232px; left: -4px; }.process-pill--two { top: 73px; left: 20px; }.process-pill--three { top: 232px; right: -4px; }.process-line { top: 225px; }.travel-dot { top: 222px; }.benefit-grid { display: block; }.benefit, .benefit:not(:first-child) { min-height: 195px; padding: 25px 0; border-top: 1px solid var(--line); border-right: 0; }.benefit__number { margin-bottom: 27px; }.products__intro { margin-bottom: 40px; }.product-grid { grid-template-rows: 380px 312px 312px; gap: 12px; }.product-card { padding: 28px; border-radius: 17px; }.site-footer { flex-wrap: wrap; gap: 10px 17px; }.site-footer > span:last-child { margin-left: 0; flex-basis: 100%; }.closing { padding: 110px 0; }
 }
 

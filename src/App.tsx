@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react'
 import { SYSTEM_ACCESS_URL } from './config'
 
-const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo.svg`
+const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo.png`
 
 type RevealProps = {
   children: ReactNode
