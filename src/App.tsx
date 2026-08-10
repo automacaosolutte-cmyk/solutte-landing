@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react'
 import { SYSTEM_ACCESS_URL } from './config'
 
-const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo.png`
+const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo-transparent.png`
 
 type RevealProps = {
   children: ReactNode
@@ -60,6 +60,7 @@ function FlowVisual() {
       <div className="visual-glow visual-glow--two" />
       <div className="orbit orbit--one" />
       <div className="orbit orbit--two" />
+      <img className="flow-brand" src={LOGO_ASSET} alt="" aria-hidden="true" />
       <div className="flow-path"><span /><span /><span /></div>
       <div className="flow-card flow-card--start"><span className="flow-card__dot" /><span>Solicitação</span></div>
       <div className="flow-card flow-card--middle"><span className="flow-card__check">✓</span><span>Processar</span></div>
@@ -76,6 +77,12 @@ function App() {
     <main>
       <header className="site-header">
         <SolutteLogo />
+        <nav className="site-nav" aria-label="Navegação principal">
+          <a href="#quem-somos">Quem somos</a>
+          <a href="#solucoes">Soluções</a>
+          <a href="#beneficios">Benefícios</a>
+          <a href="#recursos">Recursos</a>
+        </nav>
         <AccessButton compact />
       </header>
 
@@ -93,7 +100,7 @@ function App() {
         <div className="scroll-hint" aria-hidden="true"><span /> Role para descobrir</div>
       </section>
 
-      <section className="statement section-shell">
+      <section id="quem-somos" className="statement section-shell">
         <Reveal>
           <p className="eyebrow">Clareza que movimenta</p>
           <h2>Quando cada processo encontra seu caminho, <em>o negócio avança.</em></h2>
@@ -123,7 +130,7 @@ function App() {
         </div>
       </section>
 
-      <section className="benefits section-shell">
+      <section id="beneficios" className="benefits section-shell">
         <Reveal><p className="eyebrow">Feito para a rotina real</p><h2>O que melhora quando tudo <em>se conecta.</em></h2></Reveal>
         <div className="benefit-grid">
           {benefits.map(([number, title, text], index) => (
@@ -137,7 +144,7 @@ function App() {
         </div>
       </section>
 
-      <section className="products section-shell">
+      <section id="recursos" className="products section-shell">
         <Reveal className="products__intro"><p className="eyebrow">Uma operação em sintonia</p><h2>Ferramentas que acompanham <em>o seu ritmo.</em></h2></Reveal>
         <div className="product-grid">
           <Reveal className="product-card product-card--wide" delay={50}>
