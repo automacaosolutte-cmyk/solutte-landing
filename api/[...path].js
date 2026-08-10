@@ -63,12 +63,19 @@ function initializeSchema() {
         message TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
       )`,
+      `CREATE TABLE IF NOT EXISTS organiza_commands (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL, command_type TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending',
+        result_message TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
+      )`,
       'CREATE INDEX IF NOT EXISTS idx_users_status ON users(account_status)',
       'CREATE INDEX IF NOT EXISTS idx_logs_created_at ON execution_logs(created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_devices_user ON organiza_devices(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_clients_user ON organiza_clients(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_user ON organiza_file_index(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
     ], 'write')
   }
   return schemaReady
@@ -214,6 +221,50 @@ app.get('/api/organizza/clients', requireAuth, async (req, res, next) => {
   } catch (error) { next(error) }
 })
 
+app.post('/api/organizza/clients/import', requireAuth, async (req, res, next) => {
+  try {
+    const source = Array.isArray(req.body?.clients) ? req.body.clients : []
+    if (!source.length) return res.status(400).json({ error: 'Selecione uma planilha com pelo menos um cliente.' })
+    if (source.length > 2_000) return res.status(400).json({ error: 'A importação aceita até 2.000 clientes por vez.' })
+    const seenCodes = new Set()
+    const clients = source.map((raw, index) => {
+      const code = typeof raw?.code === 'string' ? raw.code.trim().slice(0, 60) : ''
+      const legalName = typeof raw?.legalName === 'string' ? raw.legalName.trim().slice(0, 300) : ''
+      const cnpj = typeof raw?.cnpj === 'string' ? raw.cnpj.replace(/\D/g, '').slice(0, 14) : ''
+      if (!code || !legalName) throw new Error(`Linha ${index + 2}: informe código e razão social.`)
+      if (seenCodes.has(code.toLocaleLowerCase())) throw new Error(`O código ${code} está repetido na planilha.`)
+      seenCodes.add(code.toLocaleLowerCase())
+      return { code, legalName, cnpj }
+    })
+    const userId = asText(req.user.id)
+    await db.batch(clients.map((client) => ({ sql: `INSERT INTO organiza_clients (id, user_id, code, legal_name, cnpj, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, code) DO UPDATE SET legal_name = excluded.legal_name, cnpj = excluded.cnpj, updated_at = excluded.updated_at`, args: [id(), userId, client.code, client.legalName, client.cnpj, now()] })), 'write')
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), userId, 'clients.imported', 'success', `${clients.length} cliente(s) importado(s) para o Organizza.`, JSON.stringify({ count: clients.length })] })
+    res.status(201).json({ imported: clients.length })
+  } catch (error) {
+    if (error instanceof Error && (/^Linha /.test(error.message) || /repetido/.test(error.message))) return res.status(400).json({ error: error.message })
+    next(error)
+  }
+})
+
+app.post('/api/organizza/commands/create-structure', requireAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const { deviceId, clientIds } = req.body || {}
+    const device = typeof deviceId === 'string' ? await one("SELECT * FROM organiza_devices WHERE id = ? AND user_id = ? AND status != 'revoked'", [deviceId, userId]) : null
+    if (!device) return res.status(400).json({ error: 'Selecione um computador conectado para criar as pastas.' })
+    const selectedIds = Array.isArray(clientIds) ? clientIds.filter((clientId) => typeof clientId === 'string' && clientId).slice(0, 2_000) : []
+    const query = selectedIds.length ? `SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ? AND id IN (${selectedIds.map(() => '?').join(', ')}) ORDER BY code ASC` : 'SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ? ORDER BY code ASC'
+    const clients = await many(query, [userId, ...selectedIds])
+    if (!clients.length) return res.status(400).json({ error: 'Importe ao menos um cliente antes de criar a estrutura.' })
+    if (selectedIds.length && clients.length !== selectedIds.length) return res.status(400).json({ error: 'Um ou mais clientes selecionados não pertencem à sua conta.' })
+    const command = { id: id(), year: new Date().getFullYear(), clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) })) }
+    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [command.id, userId, asText(device.id), 'structure.create_standard', JSON.stringify({ year: command.year, clients: command.clients })] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.requested', 'info', `Criação da estrutura padrão solicitada para ${clients.length} cliente(s).`, JSON.stringify({ commandId: command.id, count: clients.length })] })
+    res.status(201).json({ command: { id: command.id, clients: clients.length, year: command.year } })
+  } catch (error) { next(error) }
+})
+
 app.post('/api/organizza/devices/pair', requireAuth, async (req, res, next) => {
   try {
     const { deviceId, name, platform = 'windows', appVersion = '' } = req.body || {}
@@ -240,6 +291,27 @@ app.patch('/api/organizza/devices/heartbeat', requireDeviceAuth, async (req, res
     const rootPath = typeof req.body?.clientsRootPath === 'string' ? req.body.clientsRootPath.trim().slice(0, 1000) : null
     await db.execute({ sql: "UPDATE organiza_devices SET status = 'connected', clients_root_path = COALESCE(?, clients_root_path), last_seen_at = ?, updated_at = ? WHERE id = ?", args: [rootPath || null, now(), now(), asText(req.device.id)] })
     res.json({ device: publicDevice(await one('SELECT * FROM organiza_devices WHERE id = ?', [asText(req.device.id)])) })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/organizza/commands/next', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const commands = await many("SELECT * FROM organiza_commands WHERE device_id = ? AND user_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 10", [asText(req.device.id), asText(req.user.id)])
+    if (commands.length) await db.batch(commands.map((command) => ({ sql: "UPDATE organiza_commands SET status = 'processing' WHERE id = ? AND status = 'pending'", args: [asText(command.id)] })), 'write')
+    res.json({ commands: commands.map((command) => ({ id: asText(command.id), type: asText(command.command_type), payload: JSON.parse(asText(command.payload) || '{}'), createdAt: asText(command.created_at) })) })
+  } catch (error) { next(error) }
+})
+
+app.patch('/api/organizza/commands/:id', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const status = req.body?.status
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 1000) : ''
+    if (!['completed', 'failed'].includes(status) || !message) return res.status(400).json({ error: 'Informe o resultado do comando.' })
+    const command = await one("SELECT * FROM organiza_commands WHERE id = ? AND device_id = ? AND user_id = ? AND status = 'processing'", [req.params.id, asText(req.device.id), asText(req.user.id)])
+    if (!command) return res.status(404).json({ error: 'Comando não encontrado ou já concluído.' })
+    await db.execute({ sql: 'UPDATE organiza_commands SET status = ?, result_message = ?, completed_at = ? WHERE id = ?', args: [status, message, now(), asText(command.id)] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(req.user.id), asText(req.device.id), 'structure.completed', status === 'completed' ? 'success' : 'error', message, JSON.stringify({ commandId: asText(command.id), commandType: asText(command.command_type) })] })
+    res.json({ ok: true })
   } catch (error) { next(error) }
 })
 
