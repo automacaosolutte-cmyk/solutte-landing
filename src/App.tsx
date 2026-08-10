@@ -180,6 +180,23 @@ function LandingPage() {
 
 type AuthStep = 'login' | 'register' | 'payment' | 'pending'
 
+type RegisteredUser = {
+  name: string
+  email: string
+  company: string
+}
+
+const REGISTERED_USER_KEY = 'solutte-registered-user'
+
+function getRegisteredUser(): RegisteredUser | null {
+  try {
+    const savedUser = localStorage.getItem(REGISTERED_USER_KEY)
+    return savedUser ? JSON.parse(savedUser) as RegisteredUser : null
+  } catch {
+    return null
+  }
+}
+
 function PortalBrand() {
   return <img className="portal-brand" src={LOGO_ASSET} alt="Solutte Automations" />
 }
@@ -193,6 +210,13 @@ function AuthPortal() {
 
   const register = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const user = {
+      name: String(form.get('name') ?? ''),
+      email: String(form.get('email') ?? ''),
+      company: String(form.get('company') ?? ''),
+    }
+    localStorage.setItem(REGISTERED_USER_KEY, JSON.stringify(user))
     setStep('payment')
   }
 
@@ -240,9 +264,9 @@ function AuthPortal() {
         {step === 'register' && <>
           <div className="auth-panel__heading"><p className="portal-eyebrow">Comece agora</p><h2>Crie sua conta</h2><p>Cadastre sua empresa para iniciar a solicitação de acesso.</p></div>
           <form className="auth-form" onSubmit={register}>
-            <label>Seu nome<input type="text" autoComplete="name" placeholder="Como podemos chamar você?" required /></label>
-            <label>E-mail profissional<input type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
-            <label>Empresa<input type="text" autoComplete="organization" placeholder="Nome da sua empresa" required /></label>
+            <label>Seu nome<input name="name" type="text" autoComplete="name" placeholder="Como podemos chamar você?" required /></label>
+            <label>E-mail profissional<input name="email" type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
+            <label>Empresa<input name="company" type="text" autoComplete="organization" placeholder="Nome da sua empresa" required /></label>
             <label>Crie uma senha<input type="password" autoComplete="new-password" placeholder="Mínimo de 8 caracteres" minLength={8} required /></label>
             <label className="check-label check-label--terms"><input type="checkbox" required /> Li e concordo com os termos de uso e a política de privacidade.</label>
             <button className="portal-primary-button" type="submit">Continuar para pagamento <span aria-hidden="true">→</span></button>
@@ -265,14 +289,9 @@ function AuthPortal() {
   )
 }
 
-const users = [
-  ['Marina Costa', 'marina@solutte.com.br', 'Administradora', 'Ativo'],
-  ['Carlos Mendes', 'carlos@empresa.com.br', 'Operador', 'Ativo'],
-  ['Ana Ribeiro', 'ana@empresa.com.br', 'Gestora', 'Aguardando'],
-  ['Rafael Souza', 'rafael@empresa.com.br', 'Operador', 'Ativo'],
-]
-
 function AdminDashboard() {
+  const registeredUser = getRegisteredUser()
+
   return (
     <main className="admin-page">
       <aside className="admin-sidebar">
@@ -284,7 +303,7 @@ function AdminDashboard() {
           <a href="#admin-agents"><span>✦</span> Agentes</a>
           <a href="#admin-logs"><span>⇩</span> Logs de execução</a>
         </nav>
-        <div className="admin-profile"><span>MC</span><div><b>Marina Costa</b><small>Administradora</small></div></div>
+        <div className="admin-profile"><span>{registeredUser?.name.slice(0, 2).toUpperCase() ?? '—'}</span><div><b>{registeredUser?.name || 'Sem cadastro'}</b><small>{registeredUser ? 'Administradora' : 'Aguardando cadastro'}</small></div></div>
       </aside>
       <section className="admin-content">
         <header className="admin-header"><div><p className="portal-eyebrow">Painel administrativo</p><h1>Visão geral</h1></div><a className="admin-exit" href="#inicio">Sair <span aria-hidden="true">↗</span></a></header>
@@ -295,7 +314,7 @@ function AdminDashboard() {
           <article><span>Execuções hoje</span><strong>382</strong><small>98,7% concluídas</small></article>
         </section>
         <div className="admin-grid">
-          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><button type="button">+ Novo usuário</button></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{users.map(([name, email, role, status]) => <div className="user-row" key={email}><span><b>{name}</b><small>{email}</small></span><span>{role}</span><span className={status === 'Ativo' ? 'status status--active' : 'status'}>{status}</span></div>)}</div><button className="card-text-button" type="button">Ver todos os usuários →</button></section>
+          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><button type="button">+ Novo usuário</button></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{registeredUser ? <div className="user-row"><span><b>{registeredUser.name}</b><small>{registeredUser.email}</small></span><span>Administradora</span><span className="status">Aguardando</span></div> : <p className="empty-user-state">Nenhum cadastro salvo ainda. O primeiro usuário cadastrado aparecerá aqui como administrador.</p>}</div></section>
           <section className="admin-card" id="admin-tokens"><div className="admin-card__heading"><div><h2>Uso de tokens</h2><p>Consumo consolidado do período.</p></div><button type="button">Relatório</button></div><div className="token-total"><strong>1.284.650</strong><span>tokens utilizados em agosto</span></div><div className="bar-chart" aria-label="Gráfico de consumo de tokens por semana"><i style={{ height: '37%' }} /><i style={{ height: '56%' }} /><i style={{ height: '44%' }} /><i style={{ height: '76%' }} /><i style={{ height: '91%' }} /></div><div className="chart-labels"><span>Sem. 1</span><span>Sem. 2</span><span>Sem. 3</span><span>Sem. 4</span><span>Hoje</span></div></section>
           <section className="admin-card" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Automação em operação.</p></div><button type="button">Gerenciar</button></div><div className="agent-list"><div><span className="agent-icon">◈</span><b>Triagem de solicitações<small>Ativo · 124 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--red">✦</span><b>Conferência documental<small>Ativo · 86 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--light">+</span><b>Novo agente<small>Configure uma nova automação</small></b><i>→</i></div></div></section>
           <section className="admin-card" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade recente da plataforma.</p></div><button className="download-button" type="button">⇩ Baixar logs</button></div><div className="log-list"><p><span className="log-success">●</span> Agente “Triagem” concluiu a análise <time>há 2 min</time></p><p><span className="log-success">●</span> Processo #S-02914 foi atualizado <time>há 12 min</time></p><p><span className="log-info">●</span> Novo cadastro aguarda aprovação <time>há 24 min</time></p></div><button className="card-text-button" type="button">Abrir central de logs →</button></section>
