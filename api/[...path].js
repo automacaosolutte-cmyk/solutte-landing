@@ -129,6 +129,26 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (_req, res, nex
 
 app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res, next) => { try { res.json({ users: (await many('SELECT * FROM users ORDER BY created_at ASC')).map(publicUser) }) } catch (error) { next(error) } })
 
+app.get('/api/admin/token-usage', requireAuth, requireAdmin, async (_req, res, next) => {
+  try {
+    const usage = await many(`SELECT
+      users.id AS userId, users.name AS name, users.email AS email, users.role AS role,
+      COALESCE(SUM(token_usage.input_tokens), 0) AS inputTokens,
+      COALESCE(SUM(token_usage.output_tokens), 0) AS outputTokens,
+      COALESCE(SUM(token_usage.input_tokens + token_usage.output_tokens), 0) AS totalTokens,
+      MAX(token_usage.created_at) AS lastUsedAt
+      FROM users
+      LEFT JOIN token_usage ON token_usage.user_id = users.id
+      GROUP BY users.id, users.name, users.email, users.role
+      ORDER BY totalTokens DESC, users.created_at ASC`)
+    res.json({ usage: usage.map((row) => ({
+      userId: asText(row.userId), name: asText(row.name), email: asText(row.email), role: asText(row.role),
+      inputTokens: asNumber(row.inputTokens), outputTokens: asNumber(row.outputTokens), totalTokens: asNumber(row.totalTokens),
+      lastUsedAt: row.lastUsedAt ? asText(row.lastUsedAt) : null,
+    })) })
+  } catch (error) { next(error) }
+})
+
 app.patch('/api/admin/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const target = await one('SELECT * FROM users WHERE id = ?', [req.params.id])

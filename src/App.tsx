@@ -73,7 +73,7 @@ function LandingPage() {
         <SolutteLogo />
         <nav className="site-nav" aria-label="Navegação principal">
           <a href="#solucoes">Soluções</a>
-          <a href="#recursos">Recursos</a>
+          <a href="#produtos">Produtos</a>
           <a href="#beneficios">Benefícios</a>
           <a href="#como-funciona">Como funciona</a>
           <a href="#planos">Planos</a>
@@ -145,20 +145,24 @@ function LandingPage() {
         </div>
       </section>
 
-      <section id="recursos" className="products section-shell">
-        <Reveal className="products__intro"><p className="eyebrow">Uma operação em sintonia</p><h2>Ferramentas que acompanham <em>o seu ritmo.</em></h2></Reveal>
+      <section id="produtos" className="products section-shell">
+        <Reveal className="products__intro"><p className="eyebrow">Produtos Solutte</p><h2>Soluções que dão <em>espaço para avançar.</em></h2><p>Uma plataforma em expansão para organizar, automatizar e simplificar diferentes partes da sua rotina.</p></Reveal>
         <div className="product-grid">
-          <Reveal className="product-card product-card--wide" delay={50}>
-            <div className="card-copy"><span className="card-kicker">Processos</span><h3>Da entrada à entrega, sem perder o fio.</h3><p>Fluxos visuais para fazer cada etapa avançar no momento certo.</p></div>
-            <div className="mini-flow" aria-hidden="true"><span /><span /><span /><i /><i /><i /></div>
+          <Reveal className="product-card product-card--organizza" delay={40}>
+            <div className="card-copy"><span className="card-kicker">Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
+            <div className="organizza-visual" aria-hidden="true"><span className="folder folder--one" /><span className="folder folder--two" /><span className="folder folder--three" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
           </Reveal>
-          <Reveal className="product-card product-card--tasks" delay={140}>
-            <div className="card-copy"><span className="card-kicker">Tarefas</span><h3>Prioridades que ficam claras.</h3><p>Organize o agora e enxergue o que vem depois.</p></div>
-            <div className="task-stack" aria-hidden="true"><div><i /> Revisar proposta <b>Hoje</b></div><div><i /> Validar cadastro <b>Amanhã</b></div><div><i /> Preparar entrega <b>Sexta</b></div></div>
+          <Reveal className="product-card product-card--accounting" delay={110}>
+            <div className="card-copy"><span className="card-kicker">Automações Contábeis</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
+            <div className="accounting-visual" aria-hidden="true"><span>Fiscal</span><span>Contábil</span><span>Pessoal</span><i /><i /></div>
           </Reveal>
-          <Reveal className="product-card product-card--insight" delay={220}>
-            <div className="card-copy"><span className="card-kicker">Acompanhamento</span><h3>Visibilidade para decidir melhor.</h3><p>Informações que tornam cada próxima escolha mais simples.</p></div>
-            <div className="chart" aria-hidden="true"><span /><span /><span /><span /><span /><i /></div>
+          <Reveal className="product-card product-card--mei" delay={180}>
+            <div className="card-copy"><span className="card-kicker">Solutte MEI</span><h3>Informações certas, para cada MEI cadastrado.</h3><p>Um programa para organizar e encaminhar comunicações importantes aos microempreendedores de sua base.</p></div>
+            <div className="mei-visual" aria-hidden="true"><span>MEI</span><i>→</i><span>MEI</span><i>→</i><span>MEI</span></div>
+          </Reveal>
+          <Reveal className="product-card product-card--personal" delay={250}>
+            <div className="card-copy"><span className="card-kicker">Solutte Pessoal</span><h3>Uma rotina de casa mais leve.</h3><p>Um assistente para apoiar o planejamento das compras e deixar as decisões do dia a dia mais práticas.</p></div>
+            <div className="personal-visual" aria-hidden="true"><span>✓ Lista pronta</span><span>○ Itens da semana</span><span>✓ Melhor escolha</span></div>
           </Reveal>
         </div>
       </section>
@@ -194,6 +198,8 @@ type ApiUser = {
 type DashboardData = { activeUsers: number, totalTokens: number, activeAgents: number, executionsToday: number }
 type Agent = { id: string, name: string, description: string, status: string, createdAt: string }
 type Log = { id: string, eventType: string, status: 'info' | 'success' | 'warning' | 'error', message: string, createdAt: string, userName?: string, agentName?: string }
+type TokenUsage = { userId: string, name: string, email: string, role: ApiUser['role'], inputTokens: number, outputTokens: number, totalTokens: number, lastUsedAt: string | null }
+type AdminSection = 'overview' | 'users' | 'tokens' | 'agents' | 'logs'
 
 const SESSION_KEY = 'solutte-session'
 
@@ -342,28 +348,90 @@ function AuthPortal() {
   )
 }
 
+const adminSectionMeta: Record<AdminSection, { label: string, eyebrow: string, title: string }> = {
+  overview: { label: 'Visão geral', eyebrow: 'Painel administrativo', title: 'Visão geral' },
+  users: { label: 'Usuários', eyebrow: 'Gestão de acesso', title: 'Usuários cadastrados' },
+  tokens: { label: 'Consumo de tokens', eyebrow: 'Uso da plataforma', title: 'Consumo por usuário' },
+  agents: { label: 'Agentes', eyebrow: 'Automação', title: 'Agentes da operação' },
+  logs: { label: 'Logs de execução', eyebrow: 'Auditoria', title: 'Atividade registrada' },
+}
+
+function AdminNavigation({ activeSection, user }: { activeSection: AdminSection, user: ApiUser }) {
+  const links: Array<{ section: AdminSection, icon: string }> = [
+    { section: 'overview', icon: '▦' }, { section: 'users', icon: '♙' }, { section: 'tokens', icon: '◌' }, { section: 'agents', icon: '✦' }, { section: 'logs', icon: '⇩' },
+  ]
+
+  return <aside className="admin-sidebar">
+    <a href="#inicio" className="admin-sidebar__brand"><PortalBrand /></a>
+    <nav aria-label="Navegação administrativa">
+      {links.map(({ section, icon }) => <a key={section} className={activeSection === section ? 'is-active' : ''} href={`#admin/${section}`}><span>{icon}</span> {adminSectionMeta[section].label}</a>)}
+    </nav>
+    <div className="admin-profile"><span>{user.name.slice(0, 2).toUpperCase()}</span><div><b>{user.name}</b><small>Administradora</small></div></div>
+  </aside>
+}
+
+function AdminOverview({ dashboard }: { dashboard: DashboardData | null }) {
+  return <>
+    <section className="admin-metrics" aria-label="Indicadores principais">
+      <article><span>Usuários ativos</span><strong>{dashboard ? formatNumber(dashboard.activeUsers) : '—'}</strong><small>contagem real cadastrada</small></article>
+      <article><span>Tokens consumidos</span><strong>{dashboard ? formatNumber(dashboard.totalTokens) : '—'}</strong><small>total real registrado</small></article>
+      <article><span>Agentes ativos</span><strong>{dashboard ? formatNumber(dashboard.activeAgents) : '—'}</strong><small>agentes em operação</small></article>
+      <article><span>Execuções hoje</span><strong>{dashboard ? formatNumber(dashboard.executionsToday) : '—'}</strong><small>sucessos registrados hoje</small></article>
+    </section>
+    <section className="admin-overview-card">
+      <span className="admin-overview-card__icon" aria-hidden="true">✦</span>
+      <div><h2>Dados reais, organizados por área.</h2><p>Use o menu lateral para consultar pessoas cadastradas, agentes, consumo individual de tokens e o histórico de atividades.</p></div>
+      <a href="#admin/users">Ver usuários <span aria-hidden="true">→</span></a>
+    </section>
+  </>
+}
+
+function UsersPanel({ users, onUpdate }: { users: ApiUser[], onUpdate: (user: ApiUser, update: Partial<Pick<ApiUser, 'role' | 'accountStatus' | 'paymentStatus'>>) => void }) {
+  const statusLabel: Record<ApiUser['accountStatus'], string> = { active: 'Ativo', pending_payment: 'Pagamento pendente', pending_approval: 'Aguardando aprovação', suspended: 'Suspenso' }
+  return <section className="admin-card admin-card--page" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros, permissões e situação de acesso da plataforma.</p></div><a className="admin-card__action" href="#acesso">+ Novo usuário</a></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{users.length ? users.map((user) => <div className="user-row" key={user.id}><span><b>{user.name}</b><small>{user.email} · {user.company}</small></span><span>{user.role === 'admin' ? 'Administradora' : 'Usuário'}{user.role === 'user' && <button className="inline-action" type="button" onClick={() => { if (window.confirm(`Confirmar ${user.name} como administradora?`)) onUpdate(user, { role: 'admin' }) }}>Promover</button>}</span><span className={user.accountStatus === 'active' ? 'status status--active' : 'status'}>{user.accountStatus === 'pending_payment' || user.accountStatus === 'pending_approval' ? <button type="button" onClick={() => onUpdate(user, { accountStatus: 'active', paymentStatus: 'paid' })}>Liberar</button> : statusLabel[user.accountStatus]}</span></div>) : <p className="empty-user-state">Ainda não há usuários cadastrados.</p>}</div></section>
+}
+
+function TokenUsagePanel({ usage, currentUserId }: { usage: TokenUsage[], currentUserId: string }) {
+  const total = usage.reduce((sum, user) => sum + user.totalTokens, 0)
+  return <section className="admin-card admin-card--page" id="admin-tokens"><div className="admin-card__heading"><div><h2>Consumo de tokens</h2><p>Todos os usuários cadastrados, inclusive a administradora, aparecem nesta relação.</p></div></div><div className="token-page-total"><strong>{formatNumber(total)}</strong><span>tokens registrados no total</span></div><div className="token-usage-list">{usage.length ? usage.map((user) => <article className="token-user-row" key={user.userId}><div><b>{user.name}{user.userId === currentUserId && <em>Você</em>}</b><small>{user.email} · {user.role === 'admin' ? 'Administradora' : 'Usuário'}</small></div><div><span>Entrada</span><strong>{formatNumber(user.inputTokens)}</strong></div><div><span>Saída</span><strong>{formatNumber(user.outputTokens)}</strong></div><div><span>Total</span><strong>{formatNumber(user.totalTokens)}</strong></div><time>{user.lastUsedAt ? `Último uso: ${new Date(user.lastUsedAt).toLocaleDateString('pt-BR')}` : 'Ainda sem consumo'}</time></article>) : <p className="empty-user-state">Ainda não há usuários cadastrados.</p>}</div></section>
+}
+
+function AgentsPanel({ agents, onCreate }: { agents: Agent[], onCreate: () => void }) {
+  return <section className="admin-card admin-card--page" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Agentes criados para a operação.</p></div><button type="button" onClick={onCreate}>+ Criar agente</button></div><div className="agent-list">{agents.length ? agents.map((agent) => <div key={agent.id}><span className="agent-icon">◈</span><b>{agent.name}<small>{agent.description || 'Sem descrição'} · {agent.status}</small></b><i className={agent.status === 'active' ? 'status-dot' : ''}>{agent.status === 'active' ? '' : '○'}</i></div>) : <p className="empty-user-state">Nenhum agente foi criado ainda.</p>}</div></section>
+}
+
+function LogsPanel({ logs, onDownload }: { logs: Log[], onDownload: () => void }) {
+  return <section className="admin-card admin-card--page" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade registrada na plataforma.</p></div><button className="download-button" type="button" onClick={onDownload}>⇩ Baixar logs</button></div><div className="log-list">{logs.length ? logs.map((log) => <p key={log.id}><span className={`log-${log.status}`}>●</span> {log.message}<time>{new Date(log.createdAt).toLocaleString('pt-BR')}</time></p>) : <p className="empty-user-state">Ainda não há logs de execução.</p>}</div></section>
+}
+
+const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
+
 function AdminDashboard() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [users, setUsers] = useState<ApiUser[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [logs, setLogs] = useState<Log[]>([])
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage[]>([])
   const [error, setError] = useState('')
   const session = getSession()
-  const activeSection = window.location.hash.replace('#admin/', '') || 'overview'
+  const candidateSection = window.location.hash.replace('#admin/', '')
+  const activeSection: AdminSection = Object.prototype.hasOwnProperty.call(adminSectionMeta, candidateSection) ? candidateSection as AdminSection : 'overview'
 
   const loadDashboard = async () => {
     try {
       setError('')
-      const [metrics, usersResult, agentsResult, logsResult] = await Promise.all([
+      const [metrics, usersResult, agentsResult, logsResult, tokensResult] = await Promise.all([
         api<DashboardData>('/api/admin/dashboard'),
         api<{ users: ApiUser[] }>('/api/admin/users'),
         api<{ agents: Agent[] }>('/api/admin/agents'),
         api<{ logs: Log[] }>('/api/admin/logs?limit=8'),
+        api<{ usage: TokenUsage[] }>('/api/admin/token-usage'),
       ])
       setDashboard(metrics)
       setUsers(usersResult.users)
       setAgents(agentsResult.agents)
       setLogs(logsResult.logs)
+      setTokenUsage(tokensResult.usage)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Não foi possível carregar os dados do painel.')
     }
@@ -408,39 +476,19 @@ function AdminDashboard() {
     }
   }
 
-  const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
-  const statusLabel: Record<ApiUser['accountStatus'], string> = { active: 'Ativo', pending_payment: 'Pagamento pendente', pending_approval: 'Aguardando aprovação', suspended: 'Suspenso' }
-
   if (!session) return <main className="portal-page portal-page--centered"><BackToLanding /><section className="status-card"><p className="portal-eyebrow">Acesso restrito</p><h1>Faça login para acessar o painel.</h1><a className="portal-primary-button" href="#acesso">Ir para o acesso</a></section></main>
 
   return (
     <main className="admin-page">
-      <aside className="admin-sidebar">
-        <a href="#inicio" className="admin-sidebar__brand"><PortalBrand /></a>
-        <nav aria-label="Navegação administrativa">
-          <a className={activeSection === 'overview' ? 'is-active' : ''} href="#admin/overview"><span>▦</span> Visão geral</a>
-          <a className={activeSection === 'users' ? 'is-active' : ''} href="#admin/users"><span>♙</span> Usuários</a>
-          <a className={activeSection === 'tokens' ? 'is-active' : ''} href="#admin/tokens"><span>◌</span> Consumo de tokens</a>
-          <a className={activeSection === 'agents' ? 'is-active' : ''} href="#admin/agents"><span>✦</span> Agentes</a>
-          <a className={activeSection === 'logs' ? 'is-active' : ''} href="#admin/logs"><span>⇩</span> Logs de execução</a>
-        </nav>
-        <div className="admin-profile"><span>{session.user.name.slice(0, 2).toUpperCase()}</span><div><b>{session.user.name}</b><small>Administradora</small></div></div>
-      </aside>
+      <AdminNavigation activeSection={activeSection} user={session.user} />
       <section className="admin-content">
-        <header className="admin-header"><div><p className="portal-eyebrow">Painel administrativo</p><h1>Visão geral</h1></div><button className="admin-exit" type="button" onClick={() => { sessionStorage.removeItem(SESSION_KEY); window.location.hash = '#acesso' }}>Sair <span aria-hidden="true">↗</span></button></header>
+        <header className="admin-header"><div><p className="portal-eyebrow">{adminSectionMeta[activeSection].eyebrow}</p><h1>{adminSectionMeta[activeSection].title}</h1></div><button className="admin-exit" type="button" onClick={() => { sessionStorage.removeItem(SESSION_KEY); window.location.hash = '#acesso' }}>Sair <span aria-hidden="true">↗</span></button></header>
         {error && <p className="form-message" role="alert">{error}</p>}
-        <section className="admin-metrics" aria-label="Indicadores principais">
-          <article><span>Usuários ativos</span><strong>{dashboard ? formatNumber(dashboard.activeUsers) : '—'}</strong><small>contagem real cadastrada</small></article>
-          <article><span>Tokens consumidos</span><strong>{dashboard ? formatNumber(dashboard.totalTokens) : '—'}</strong><small>total real registrado</small></article>
-          <article><span>Agentes ativos</span><strong>{dashboard ? formatNumber(dashboard.activeAgents) : '—'}</strong><small>agentes em operação</small></article>
-          <article><span>Execuções hoje</span><strong>{dashboard ? formatNumber(dashboard.executionsToday) : '—'}</strong><small>sucessos registrados hoje</small></article>
-        </section>
-        <div className="admin-grid">
-          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><a className="admin-card__action" href="#acesso">+ Novo usuário</a></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{users.length ? users.map((user) => <div className="user-row" key={user.id}><span><b>{user.name}</b><small>{user.email}</small></span><span>{user.role === 'admin' ? 'Administradora' : 'Usuário'}{user.role === 'user' && <button className="inline-action" type="button" onClick={() => { if (window.confirm(`Confirmar ${user.name} como administradora?`)) void updateUser(user, { role: 'admin' }) }}>Promover</button>}</span><span className={user.accountStatus === 'active' ? 'status status--active' : 'status'}>{user.accountStatus === 'pending_payment' || user.accountStatus === 'pending_approval' ? <button type="button" onClick={() => void updateUser(user, { accountStatus: 'active', paymentStatus: 'paid' })}>Liberar</button> : statusLabel[user.accountStatus]}</span></div>) : <p className="empty-user-state">Ainda não há usuários cadastrados.</p>}</div></section>
-          <section className="admin-card" id="admin-tokens"><div className="admin-card__heading"><div><h2>Uso de tokens</h2><p>Consumo consolidado do banco de dados.</p></div></div><div className="token-total"><strong>{dashboard ? formatNumber(dashboard.totalTokens) : '—'}</strong><span>tokens registrados</span></div><p className="empty-user-state">O gráfico será preenchido pelas execuções reais dos agentes.</p></section>
-          <section className="admin-card" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Automação em operação.</p></div><button type="button" onClick={() => void createAgent()}>+ Criar agente</button></div><div className="agent-list">{agents.length ? agents.map((agent) => <div key={agent.id}><span className="agent-icon">◈</span><b>{agent.name}<small>{agent.description || 'Sem descrição'} · {agent.status}</small></b><i className={agent.status === 'active' ? 'status-dot' : ''}>{agent.status === 'active' ? '' : '○'}</i></div>) : <p className="empty-user-state">Nenhum agente foi criado ainda.</p>}</div></section>
-          <section className="admin-card" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade registrada na plataforma.</p></div><button className="download-button" type="button" onClick={() => void downloadLogs()}>⇩ Baixar logs</button></div><div className="log-list">{logs.length ? logs.map((log) => <p key={log.id}><span className={`log-${log.status}`}>●</span> {log.message}<time>{new Date(log.createdAt).toLocaleString('pt-BR')}</time></p>) : <p className="empty-user-state">Ainda não há logs de execução.</p>}</div></section>
-        </div>
+        {activeSection === 'overview' && <AdminOverview dashboard={dashboard} />}
+        {activeSection === 'users' && <UsersPanel users={users} onUpdate={(user, update) => void updateUser(user, update)} />}
+        {activeSection === 'tokens' && <TokenUsagePanel usage={tokenUsage} currentUserId={session.user.id} />}
+        {activeSection === 'agents' && <AgentsPanel agents={agents} onCreate={() => void createAgent()} />}
+        {activeSection === 'logs' && <LogsPanel logs={logs} onDownload={() => void downloadLogs()} />}
       </section>
     </main>
   )
