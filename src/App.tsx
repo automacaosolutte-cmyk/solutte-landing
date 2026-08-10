@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { SYSTEM_ACCESS_URL } from './config'
+import { API_URL, SYSTEM_ACCESS_URL } from './config'
 
 const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-automations-logo-transparent.png`
 
@@ -180,21 +180,45 @@ function LandingPage() {
 
 type AuthStep = 'login' | 'register' | 'payment' | 'pending'
 
-type RegisteredUser = {
+type ApiUser = {
+  id: string
   name: string
   email: string
   company: string
+  role: 'admin' | 'user'
+  accountStatus: 'active' | 'pending_payment' | 'pending_approval' | 'suspended'
+  paymentStatus: 'not_required' | 'pending' | 'paid' | 'failed'
+  createdAt: string
 }
 
-const REGISTERED_USER_KEY = 'solutte-registered-user'
+type DashboardData = { activeUsers: number, totalTokens: number, activeAgents: number, executionsToday: number }
+type Agent = { id: string, name: string, description: string, status: string, createdAt: string }
+type Log = { id: string, eventType: string, status: 'info' | 'success' | 'warning' | 'error', message: string, createdAt: string, userName?: string, agentName?: string }
 
-function getRegisteredUser(): RegisteredUser | null {
+const SESSION_KEY = 'solutte-session'
+
+function getSession(): { token: string, user: ApiUser } | null {
   try {
-    const savedUser = localStorage.getItem(REGISTERED_USER_KEY)
-    return savedUser ? JSON.parse(savedUser) as RegisteredUser : null
+    const session = sessionStorage.getItem(SESSION_KEY)
+    return session ? JSON.parse(session) as { token: string, user: ApiUser } : null
   } catch {
     return null
   }
+}
+
+async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!API_URL) throw new Error('A API ainda não foi configurada para esta publicação.')
+  const session = getSession()
+  const headers = new Headers(options.headers)
+  headers.set('Content-Type', 'application/json')
+  if (session) headers.set('Authorization', `Bearer ${session.token}`)
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.error || 'Não foi possível concluir a solicitação.')
+  return body as T
 }
 
 function PortalBrand() {
@@ -207,17 +231,46 @@ function BackToLanding() {
 
 function AuthPortal() {
   const [step, setStep] = useState<AuthStep>('login')
+  const [error, setError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const register = (event: FormEvent<HTMLFormElement>) => {
+  const register = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const user = {
+    setError('')
+    setIsSubmitting(true)
+    try {
+      const result = await api<{ user: ApiUser, firstUser: boolean }>('/api/auth/register', { method: 'POST', body: JSON.stringify({
       name: String(form.get('name') ?? ''),
       email: String(form.get('email') ?? ''),
       company: String(form.get('company') ?? ''),
+      password: String(form.get('password') ?? ''),
+      }) })
+      if (result.firstUser) {
+        setError('Seu cadastro de administradora foi criado. Faça login para acessar o painel.')
+        setStep('login')
+      } else setStep('payment')
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível concluir o cadastro.')
+    } finally {
+      setIsSubmitting(false)
     }
-    localStorage.setItem(REGISTERED_USER_KEY, JSON.stringify(user))
-    setStep('payment')
+  }
+
+  const login = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setError('')
+    setIsSubmitting(true)
+    try {
+      const session = await api<{ token: string, user: ApiUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) })
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
+      window.location.hash = session.user.role === 'admin' ? '#admin/overview' : '#inicio'
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível entrar.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   if (step === 'pending') {
@@ -251,14 +304,14 @@ function AuthPortal() {
       <section className="auth-panel" aria-live="polite">
         {step === 'login' && <>
           <div className="auth-panel__heading"><p className="portal-eyebrow">Bem-vindo de volta</p><h2>Acesse sua conta</h2><p>Use os dados cadastrados para entrar na plataforma.</p></div>
-          <form className="auth-form" onSubmit={(event) => { event.preventDefault(); window.location.hash = '#admin' }}>
-            <label>E-mail<input type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
-            <label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" required /></label>
+          <form className="auth-form" onSubmit={login}>
+            <label>E-mail<input name="email" type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
+            <label>Senha<input name="password" type="password" autoComplete="current-password" placeholder="Sua senha" required /></label>
             <div className="auth-form__row"><label className="check-label"><input type="checkbox" /> Manter conectado</label><button type="button" className="text-button">Esqueci minha senha</button></div>
-            <button className="portal-primary-button" type="submit">Entrar na plataforma <span aria-hidden="true">→</span></button>
+            <button className="portal-primary-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Entrando…' : <>Entrar na plataforma <span aria-hidden="true">→</span></>}</button>
           </form>
           <p className="auth-switch">Ainda não possui uma conta? <button type="button" onClick={() => setStep('register')}>Cadastre-se</button></p>
-          <div className="demo-note"><span aria-hidden="true">◇</span><div><strong>Ambiente de demonstração</strong><p>Nesta versão, qualquer acesso abre a prévia administrativa. O backend vai definir usuários, senhas e permissões reais.</p><a href="#admin">Visualizar painel administrativo →</a></div></div>
+          {error && <p className="form-message" role="alert">{error}</p>}
         </>}
 
         {step === 'register' && <>
@@ -267,11 +320,12 @@ function AuthPortal() {
             <label>Seu nome<input name="name" type="text" autoComplete="name" placeholder="Como podemos chamar você?" required /></label>
             <label>E-mail profissional<input name="email" type="email" autoComplete="email" placeholder="voce@empresa.com.br" required /></label>
             <label>Empresa<input name="company" type="text" autoComplete="organization" placeholder="Nome da sua empresa" required /></label>
-            <label>Crie uma senha<input type="password" autoComplete="new-password" placeholder="Mínimo de 8 caracteres" minLength={8} required /></label>
+            <label>Crie uma senha<input name="password" type="password" autoComplete="new-password" placeholder="Mínimo de 8 caracteres" minLength={8} required /></label>
             <label className="check-label check-label--terms"><input type="checkbox" required /> Li e concordo com os termos de uso e a política de privacidade.</label>
-            <button className="portal-primary-button" type="submit">Continuar para pagamento <span aria-hidden="true">→</span></button>
+            <button className="portal-primary-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Criando cadastro…' : <>Continuar para pagamento <span aria-hidden="true">→</span></>}</button>
           </form>
           <p className="auth-switch">Já possui uma conta? <button type="button" onClick={() => setStep('login')}>Acessar</button></p>
+          {error && <p className="form-message" role="alert">{error}</p>}
         </>}
 
         {step === 'payment' && <>
@@ -290,34 +344,103 @@ function AuthPortal() {
 }
 
 function AdminDashboard() {
-  const registeredUser = getRegisteredUser()
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null)
+  const [users, setUsers] = useState<ApiUser[]>([])
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [logs, setLogs] = useState<Log[]>([])
+  const [error, setError] = useState('')
+  const session = getSession()
+  const activeSection = window.location.hash.replace('#admin/', '') || 'overview'
+
+  const loadDashboard = async () => {
+    try {
+      setError('')
+      const [metrics, usersResult, agentsResult, logsResult] = await Promise.all([
+        api<DashboardData>('/api/admin/dashboard'),
+        api<{ users: ApiUser[] }>('/api/admin/users'),
+        api<{ agents: Agent[] }>('/api/admin/agents'),
+        api<{ logs: Log[] }>('/api/admin/logs?limit=8'),
+      ])
+      setDashboard(metrics)
+      setUsers(usersResult.users)
+      setAgents(agentsResult.agents)
+      setLogs(logsResult.logs)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível carregar os dados do painel.')
+    }
+  }
+
+  useEffect(() => { void loadDashboard() }, [])
+
+  const updateUser = async (user: ApiUser, update: Partial<Pick<ApiUser, 'role' | 'accountStatus' | 'paymentStatus'>>) => {
+    try {
+      await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: JSON.stringify(update) })
+      await loadDashboard()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível atualizar o usuário.')
+    }
+  }
+
+  const createAgent = async () => {
+    const name = window.prompt('Qual é o nome do novo agente?')
+    if (!name?.trim()) return
+    const description = window.prompt('Descreva brevemente o que ele faz.') || ''
+    try {
+      await api('/api/admin/agents', { method: 'POST', body: JSON.stringify({ name, description, status: 'draft' }) })
+      await loadDashboard()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível criar o agente.')
+    }
+  }
+
+  const downloadLogs = async () => {
+    try {
+      if (!API_URL || !session) throw new Error('Faça login para baixar os logs.')
+      const response = await fetch(`${API_URL}/api/admin/logs/download`, { headers: { Authorization: `Bearer ${session.token}` } })
+      if (!response.ok) throw new Error('Não foi possível gerar o arquivo de logs.')
+      const file = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = file
+      link.download = 'solutte-logs.json'
+      link.click()
+      URL.revokeObjectURL(file)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível baixar os logs.')
+    }
+  }
+
+  const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
+  const statusLabel: Record<ApiUser['accountStatus'], string> = { active: 'Ativo', pending_payment: 'Pagamento pendente', pending_approval: 'Aguardando aprovação', suspended: 'Suspenso' }
+
+  if (!session) return <main className="portal-page portal-page--centered"><BackToLanding /><section className="status-card"><p className="portal-eyebrow">Acesso restrito</p><h1>Faça login para acessar o painel.</h1><a className="portal-primary-button" href="#acesso">Ir para o acesso</a></section></main>
 
   return (
     <main className="admin-page">
       <aside className="admin-sidebar">
         <a href="#inicio" className="admin-sidebar__brand"><PortalBrand /></a>
         <nav aria-label="Navegação administrativa">
-          <a className="is-active" href="#admin"><span>▦</span> Visão geral</a>
-          <a href="#admin-users"><span>♙</span> Usuários</a>
-          <a href="#admin-tokens"><span>◌</span> Consumo de tokens</a>
-          <a href="#admin-agents"><span>✦</span> Agentes</a>
-          <a href="#admin-logs"><span>⇩</span> Logs de execução</a>
+          <a className={activeSection === 'overview' ? 'is-active' : ''} href="#admin/overview"><span>▦</span> Visão geral</a>
+          <a className={activeSection === 'users' ? 'is-active' : ''} href="#admin/users"><span>♙</span> Usuários</a>
+          <a className={activeSection === 'tokens' ? 'is-active' : ''} href="#admin/tokens"><span>◌</span> Consumo de tokens</a>
+          <a className={activeSection === 'agents' ? 'is-active' : ''} href="#admin/agents"><span>✦</span> Agentes</a>
+          <a className={activeSection === 'logs' ? 'is-active' : ''} href="#admin/logs"><span>⇩</span> Logs de execução</a>
         </nav>
-        <div className="admin-profile"><span>{registeredUser?.name.slice(0, 2).toUpperCase() ?? '—'}</span><div><b>{registeredUser?.name || 'Sem cadastro'}</b><small>{registeredUser ? 'Administradora' : 'Aguardando cadastro'}</small></div></div>
+        <div className="admin-profile"><span>{session.user.name.slice(0, 2).toUpperCase()}</span><div><b>{session.user.name}</b><small>Administradora</small></div></div>
       </aside>
       <section className="admin-content">
-        <header className="admin-header"><div><p className="portal-eyebrow">Painel administrativo</p><h1>Visão geral</h1></div><a className="admin-exit" href="#inicio">Sair <span aria-hidden="true">↗</span></a></header>
+        <header className="admin-header"><div><p className="portal-eyebrow">Painel administrativo</p><h1>Visão geral</h1></div><button className="admin-exit" type="button" onClick={() => { sessionStorage.removeItem(SESSION_KEY); window.location.hash = '#acesso' }}>Sair <span aria-hidden="true">↗</span></button></header>
+        {error && <p className="form-message" role="alert">{error}</p>}
         <section className="admin-metrics" aria-label="Indicadores principais">
-          <article><span>Usuários ativos</span><strong>24</strong><small>+4 este mês</small></article>
-          <article><span>Tokens consumidos</span><strong>1,28 mi</strong><small>de 2 mi disponíveis</small></article>
-          <article><span>Agentes ativos</span><strong>06</strong><small>2 em desenvolvimento</small></article>
-          <article><span>Execuções hoje</span><strong>382</strong><small>98,7% concluídas</small></article>
+          <article><span>Usuários ativos</span><strong>{dashboard ? formatNumber(dashboard.activeUsers) : '—'}</strong><small>contagem real cadastrada</small></article>
+          <article><span>Tokens consumidos</span><strong>{dashboard ? formatNumber(dashboard.totalTokens) : '—'}</strong><small>total real registrado</small></article>
+          <article><span>Agentes ativos</span><strong>{dashboard ? formatNumber(dashboard.activeAgents) : '—'}</strong><small>agentes em operação</small></article>
+          <article><span>Execuções hoje</span><strong>{dashboard ? formatNumber(dashboard.executionsToday) : '—'}</strong><small>sucessos registrados hoje</small></article>
         </section>
         <div className="admin-grid">
-          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><button type="button">+ Novo usuário</button></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{registeredUser ? <div className="user-row"><span><b>{registeredUser.name}</b><small>{registeredUser.email}</small></span><span>Administradora</span><span className="status">Aguardando</span></div> : <p className="empty-user-state">Nenhum cadastro salvo ainda. O primeiro usuário cadastrado aparecerá aqui como administrador.</p>}</div></section>
-          <section className="admin-card" id="admin-tokens"><div className="admin-card__heading"><div><h2>Uso de tokens</h2><p>Consumo consolidado do período.</p></div><button type="button">Relatório</button></div><div className="token-total"><strong>1.284.650</strong><span>tokens utilizados em agosto</span></div><div className="bar-chart" aria-label="Gráfico de consumo de tokens por semana"><i style={{ height: '37%' }} /><i style={{ height: '56%' }} /><i style={{ height: '44%' }} /><i style={{ height: '76%' }} /><i style={{ height: '91%' }} /></div><div className="chart-labels"><span>Sem. 1</span><span>Sem. 2</span><span>Sem. 3</span><span>Sem. 4</span><span>Hoje</span></div></section>
-          <section className="admin-card" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Automação em operação.</p></div><button type="button">Gerenciar</button></div><div className="agent-list"><div><span className="agent-icon">◈</span><b>Triagem de solicitações<small>Ativo · 124 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--red">✦</span><b>Conferência documental<small>Ativo · 86 execuções hoje</small></b><i className="status-dot" /></div><div><span className="agent-icon agent-icon--light">+</span><b>Novo agente<small>Configure uma nova automação</small></b><i>→</i></div></div></section>
-          <section className="admin-card" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade recente da plataforma.</p></div><button className="download-button" type="button">⇩ Baixar logs</button></div><div className="log-list"><p><span className="log-success">●</span> Agente “Triagem” concluiu a análise <time>há 2 min</time></p><p><span className="log-success">●</span> Processo #S-02914 foi atualizado <time>há 12 min</time></p><p><span className="log-info">●</span> Novo cadastro aguarda aprovação <time>há 24 min</time></p></div><button className="card-text-button" type="button">Abrir central de logs →</button></section>
+          <section className="admin-card admin-card--users" id="admin-users"><div className="admin-card__heading"><div><h2>Usuários</h2><p>Cadastros e permissões da plataforma.</p></div><a className="admin-card__action" href="#acesso">+ Novo usuário</a></div><div className="user-table"><div className="user-table__labels"><span>Usuário</span><span>Perfil</span><span>Status</span></div>{users.length ? users.map((user) => <div className="user-row" key={user.id}><span><b>{user.name}</b><small>{user.email}</small></span><span>{user.role === 'admin' ? 'Administradora' : 'Usuário'}{user.role === 'user' && <button className="inline-action" type="button" onClick={() => { if (window.confirm(`Confirmar ${user.name} como administradora?`)) void updateUser(user, { role: 'admin' }) }}>Promover</button>}</span><span className={user.accountStatus === 'active' ? 'status status--active' : 'status'}>{user.accountStatus === 'pending_payment' || user.accountStatus === 'pending_approval' ? <button type="button" onClick={() => void updateUser(user, { accountStatus: 'active', paymentStatus: 'paid' })}>Liberar</button> : statusLabel[user.accountStatus]}</span></div>) : <p className="empty-user-state">Ainda não há usuários cadastrados.</p>}</div></section>
+          <section className="admin-card" id="admin-tokens"><div className="admin-card__heading"><div><h2>Uso de tokens</h2><p>Consumo consolidado do banco de dados.</p></div></div><div className="token-total"><strong>{dashboard ? formatNumber(dashboard.totalTokens) : '—'}</strong><span>tokens registrados</span></div><p className="empty-user-state">O gráfico será preenchido pelas execuções reais dos agentes.</p></section>
+          <section className="admin-card" id="admin-agents"><div className="admin-card__heading"><div><h2>Agentes</h2><p>Automação em operação.</p></div><button type="button" onClick={() => void createAgent()}>+ Criar agente</button></div><div className="agent-list">{agents.length ? agents.map((agent) => <div key={agent.id}><span className="agent-icon">◈</span><b>{agent.name}<small>{agent.description || 'Sem descrição'} · {agent.status}</small></b><i className={agent.status === 'active' ? 'status-dot' : ''}>{agent.status === 'active' ? '' : '○'}</i></div>) : <p className="empty-user-state">Nenhum agente foi criado ainda.</p>}</div></section>
+          <section className="admin-card" id="admin-logs"><div className="admin-card__heading"><div><h2>Logs de execução</h2><p>Atividade registrada na plataforma.</p></div><button className="download-button" type="button" onClick={() => void downloadLogs()}>⇩ Baixar logs</button></div><div className="log-list">{logs.length ? logs.map((log) => <p key={log.id}><span className={`log-${log.status}`}>●</span> {log.message}<time>{new Date(log.createdAt).toLocaleString('pt-BR')}</time></p>) : <p className="empty-user-state">Ainda não há logs de execução.</p>}</div></section>
         </div>
       </section>
     </main>
@@ -334,7 +457,7 @@ function App() {
   }, [])
 
   if (route === '#acesso') return <AuthPortal />
-  if (route === '#admin') return <AdminDashboard />
+  if (route.startsWith('#admin')) return <AdminDashboard />
   return <LandingPage />
 }
 

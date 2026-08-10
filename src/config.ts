@@ -3,3 +3,6 @@
  * interna demonstrativa desta aplicação, em `#acesso`.
  */
 export const SYSTEM_ACCESS_URL: string | null = null
+
+/** URL pública da API. Configure VITE_API_URL no deploy da landing. */
+export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
