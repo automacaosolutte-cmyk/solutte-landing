@@ -54,19 +54,6 @@ function AccessButton({ compact = false }: { compact?: boolean }) {
   return <a className={className} href="#acesso">Acessar sistema <span aria-hidden="true">↗</span></a>
 }
 
-function FlowVisual() {
-  return (
-    <div className="flow-visual flow-visual--brand" aria-label="Logotipo Solutte Automations e representação de uma operação automatizada" role="img">
-      <div className="hero-dots" />
-      <div className="hero-logo-halo" />
-      <img className="flow-brand" src={LOGO_ASSET} alt="" aria-hidden="true" />
-      <span className="hero-orb hero-orb--one" /><span className="hero-orb hero-orb--two" />
-      <div className="hero-flow-card hero-flow-card--one"><span>✓</span> Processos em fluxo</div>
-      <div className="hero-flow-card hero-flow-card--two"><span>↗</span> Operação conectada</div>
-    </div>
-  )
-}
-
 function LandingPage() {
   return (
     <main>
@@ -85,8 +72,9 @@ function LandingPage() {
 
       <section id="inicio" className="hero section-shell">
         <div className="hero__copy">
+          <div className="hero-brand-lockup" aria-label="Solutte Automações Empresariais"><img src={LOGO_ASSET} alt="" /><div><b>Solutte</b><small>Automações empresariais</small></div></div>
           <p className="eyebrow">Automações empresariais</p>
-          <h1>Inteligência que<br /><em>simplifica</em> processos.</h1>
+          <h1>Inteligência que <em>simplifica</em> processos.</h1>
           <p className="hero__description">A Solutte Automations conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
           <div className="hero__actions">
             <a className="primary-link" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
@@ -98,7 +86,6 @@ function LandingPage() {
             <span><b>◌</b> Suporte especializado<br />sempre que precisar</span>
           </div>
         </div>
-        <FlowVisual />
         <div className="scroll-hint" aria-hidden="true"><span /> Role para descobrir</div>
       </section>
 
@@ -151,7 +138,7 @@ function LandingPage() {
         <div className="product-grid">
           <Reveal className="product-card product-card--organizza" delay={40}>
             <div className="card-copy"><span className="card-kicker">Solutte Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
-            <div className="organizza-visual" aria-hidden="true"><img src="/assets/solutte-organizza-mark.png" alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
+            <div className="organizza-visual" aria-hidden="true"><img src="/assets/solutte-tech-mark.png" alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
           </Reveal>
           <Reveal className="product-card product-card--accounting" delay={110}>
             <div className="card-copy"><span className="card-kicker">Solutte Contábil</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
@@ -235,7 +222,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 function PortalBrand() {
-  return <img className="portal-brand" src={LOGO_ASSET} alt="Solutte Automations" />
+  return <span className="portal-lockup"><img className="portal-brand" src={LOGO_ASSET} alt="" /><span><b>Solutte</b><small>Automações empresariais</small></span></span>
 }
 
 function BackToLanding() {
@@ -416,7 +403,7 @@ function LogsPanel({ logs, onDownload }: { logs: Log[], onDownload: () => void }
 const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
 
 function ModuleVisual({ className }: { className: string }) {
-  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><img src="/assets/solutte-organizza-mark.png" alt="" /><span>⌕ Izza</span></div>
+  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><img src="/assets/solutte-tech-mark.png" alt="" /><span>⌕ Izza</span></div>
   if (className === 'module-card--accounting') return <div className="module-visual module-visual--accounting" aria-hidden="true"><span>F</span><span>C</span><span>DP</span><span>+</span></div>
   if (className === 'module-card--mei') return <div className="module-visual module-visual--mei" aria-hidden="true"><span>MEI</span><i>→</i><span>DAS</span></div>
   return <div className="module-visual module-visual--personal" aria-hidden="true"><span>✓ Lista da semana</span><span>○ Para comprar</span></div>
