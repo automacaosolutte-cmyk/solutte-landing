@@ -55,19 +55,13 @@ function AccessButton({ compact = false }: { compact?: boolean }) {
 
 function FlowVisual() {
   return (
-    <div className="flow-visual" aria-label="Representação visual de um processo automatizado" role="img">
-      <div className="visual-glow visual-glow--one" />
-      <div className="visual-glow visual-glow--two" />
-      <div className="orbit orbit--one" />
-      <div className="orbit orbit--two" />
+    <div className="flow-visual flow-visual--brand" aria-label="Logotipo Solutte e representação de uma operação automatizada" role="img">
+      <div className="hero-dots" />
+      <div className="hero-logo-halo" />
       <img className="flow-brand" src={LOGO_ASSET} alt="" aria-hidden="true" />
-      <div className="flow-path"><span /><span /><span /></div>
-      <div className="flow-card flow-card--start"><span className="flow-card__dot" /><span>Solicitação</span></div>
-      <div className="flow-card flow-card--middle"><span className="flow-card__check">✓</span><span>Processar</span></div>
-      <div className="flow-card flow-card--end"><span className="flow-card__spark">✦</span><span>Concluído</span></div>
-      <div className="flow-node flow-node--one" />
-      <div className="flow-node flow-node--two" />
-      <div className="flow-status"><span className="pulse" /> Fluxo ativo</div>
+      <span className="hero-orb hero-orb--one" /><span className="hero-orb hero-orb--two" />
+      <div className="hero-flow-card hero-flow-card--one"><span>✓</span> Processos em fluxo</div>
+      <div className="hero-flow-card hero-flow-card--two"><span>↗</span> Operação conectada</div>
     </div>
   )
 }
@@ -78,39 +72,46 @@ function App() {
       <header className="site-header">
         <SolutteLogo />
         <nav className="site-nav" aria-label="Navegação principal">
-          <a href="#quem-somos">Quem somos</a>
           <a href="#solucoes">Soluções</a>
-          <a href="#beneficios">Benefícios</a>
           <a href="#recursos">Recursos</a>
+          <a href="#beneficios">Benefícios</a>
+          <a href="#como-funciona">Como funciona</a>
+          <a href="#planos">Planos</a>
+          <a href="#contato">Contato</a>
         </nav>
-        <AccessButton compact />
+        <a className="header-cta" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
       </header>
 
       <section id="inicio" className="hero section-shell">
         <div className="hero__copy">
           <p className="eyebrow">Automação inteligente para empresas</p>
-          <h1>O seu dia a dia,<br /><em>em fluxo.</em></h1>
-          <p className="hero__description">Transforme rotinas complexas em processos simples, organizados e prontos para acontecer.</p>
+          <h1>Inteligência que<br /><em>simplifica</em> processos.</h1>
+          <p className="hero__description">A Solutte conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
           <div className="hero__actions">
-            <AccessButton />
-            <a className="text-link" href="#solucoes">Conheça a Solutte <span aria-hidden="true">↓</span></a>
+            <a className="primary-link" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
+            <a className="secondary-link" href="#como-funciona"><span aria-hidden="true">▷</span> Ver como funciona</a>
+          </div>
+          <div className="hero__trust">
+            <span><b>♢</b> Segurança de dados<br />e conformidade</span>
+            <span><b>☁</b> Solução 100% em nuvem<br />com alta disponibilidade</span>
+            <span><b>◌</b> Suporte especializado<br />sempre que precisar</span>
           </div>
         </div>
         <FlowVisual />
         <div className="scroll-hint" aria-hidden="true"><span /> Role para descobrir</div>
       </section>
 
-      <section id="quem-somos" className="statement section-shell">
+      <section id="solucoes" className="statement section-shell">
         <Reveal>
-          <p className="eyebrow">Clareza que movimenta</p>
-          <h2>Quando cada processo encontra seu caminho, <em>o negócio avança.</em></h2>
+          <p className="eyebrow">Soluções completas</p>
+          <h2>Tudo que sua operação precisa para <em>avançar.</em></h2>
         </Reveal>
         <Reveal className="statement__detail" delay={110}>
-          <p>A Solutte conecta tarefas, pessoas e informações em uma operação que funciona com mais precisão — sem complicar o que já é importante.</p>
+          <p>Automatize processos, integre informações e tenha o controle necessário para tomar decisões melhores e mais rápidas.</p>
         </Reveal>
       </section>
 
-      <section id="solucoes" className="transformation">
+      <section id="como-funciona" className="transformation">
         <div className="section-shell transformation__heading">
           <Reveal>
             <p className="eyebrow eyebrow--light">Do manual ao essencial</p>
@@ -162,7 +163,7 @@ function App() {
         </div>
       </section>
 
-      <section className="closing section-shell">
+      <section id="planos" className="closing section-shell">
         <Reveal>
           <span className="closing__spark" aria-hidden="true">✦</span>
           <p className="eyebrow">Simplifique o que move sua empresa</p>
@@ -172,7 +173,7 @@ function App() {
         </Reveal>
       </section>
 
-      <footer className="site-footer section-shell"><SolutteLogo /><span>Automação que faz sentido.</span><span>© {new Date().getFullYear()} Solutte</span></footer>
+      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automação que faz sentido.</span><span>© {new Date().getFullYear()} Solutte</span></footer>
     </main>
   )
 }
