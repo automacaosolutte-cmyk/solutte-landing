@@ -149,16 +149,16 @@ function LandingPage() {
         <Reveal className="products__intro"><p className="eyebrow">Produtos Solutte</p><h2>Soluções que dão <em>espaço para avançar.</em></h2><p>Uma plataforma em expansão para organizar, automatizar e simplificar diferentes partes da sua rotina.</p></Reveal>
         <div className="product-grid">
           <Reveal className="product-card product-card--organizza" delay={40}>
-            <div className="card-copy"><span className="card-kicker">Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
+            <div className="card-copy"><span className="card-kicker">Solutte Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
             <div className="organizza-visual" aria-hidden="true"><span className="folder folder--one" /><span className="folder folder--two" /><span className="folder folder--three" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
           </Reveal>
           <Reveal className="product-card product-card--accounting" delay={110}>
-            <div className="card-copy"><span className="card-kicker">Automações Contábeis</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
-            <div className="accounting-visual" aria-hidden="true"><span>Fiscal</span><span>Contábil</span><span>Pessoal</span><i /><i /></div>
+            <div className="card-copy"><span className="card-kicker">Solutte Contábil</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
+            <div className="accounting-visual" aria-hidden="true"><span>Fiscal</span><span>Contábil</span><span>DP</span><span>Societário</span><span>+</span><i /></div>
           </Reveal>
           <Reveal className="product-card product-card--mei" delay={180}>
             <div className="card-copy"><span className="card-kicker">Solutte MEI</span><h3>Informações certas, para cada MEI cadastrado.</h3><p>Um programa para organizar e encaminhar comunicações importantes aos microempreendedores de sua base.</p></div>
-            <div className="mei-visual" aria-hidden="true"><span>MEI</span><i>→</i><span>MEI</span><i>→</i><span>MEI</span></div>
+            <div className="mei-visual" aria-hidden="true"><span>MEI</span><i>→</i><span>DASMEI</span><i>→</i><span>+</span></div>
           </Reveal>
           <Reveal className="product-card product-card--personal" delay={250}>
             <div className="card-copy"><span className="card-kicker">Solutte Pessoal</span><h3>Uma rotina de casa mais leve.</h3><p>Um assistente para apoiar o planejamento das compras e deixar as decisões do dia a dia mais práticas.</p></div>
