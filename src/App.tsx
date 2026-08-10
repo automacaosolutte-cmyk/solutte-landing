@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { API_URL, SYSTEM_ACCESS_URL } from './config'
+import { API_URL, ORGANIZZA_URL, SYSTEM_ACCESS_URL } from './config'
 
 const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo-empresariais-transparent.png`
 
@@ -201,6 +201,13 @@ type Log = { id: string, eventType: string, status: 'info' | 'success' | 'warnin
 type TokenUsage = { userId: string, name: string, email: string, role: ApiUser['role'], inputTokens: number, outputTokens: number, totalTokens: number, lastUsedAt: string | null }
 type AdminSection = 'overview' | 'users' | 'tokens' | 'agents' | 'logs'
 
+const modules = [
+  { name: 'Solutte Organizza', eyebrow: 'Organização inteligente', description: 'Pastas, arquivos e a Izza para encontrar documentos com mais rapidez.', className: 'module-card--organizza', available: true },
+  { name: 'Solutte Contábil', eyebrow: 'Operação contábil', description: 'Fiscal, Contábil, DP, Societário e mais módulos em uma só operação.', className: 'module-card--accounting', available: false },
+  { name: 'Solutte MEI', eyebrow: 'Comunicação para MEIs', description: 'Informações relevantes para os microempreendedores da sua base.', className: 'module-card--mei', available: false },
+  { name: 'Solutte Pessoal', eyebrow: 'Rotina pessoal', description: 'Um assistente para apoiar as compras e decisões do dia a dia.', className: 'module-card--personal', available: false },
+] as const
+
 const SESSION_KEY = 'solutte-session'
 
 function getSession(): { token: string, user: ApiUser } | null {
@@ -270,7 +277,7 @@ function AuthPortal() {
     try {
       const session = await api<{ token: string, user: ApiUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: form.get('email'), password: form.get('password') }) })
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
-      window.location.hash = session.user.role === 'admin' ? '#admin/overview' : '#inicio'
+      window.location.hash = '#modulos'
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Não foi possível entrar.')
     } finally {
@@ -364,6 +371,7 @@ function AdminNavigation({ activeSection, user }: { activeSection: AdminSection,
   return <aside className="admin-sidebar">
     <a href="#inicio" className="admin-sidebar__brand"><PortalBrand /></a>
     <nav aria-label="Navegação administrativa">
+      <a href="#modulos"><span>◇</span> Meus módulos</a>
       {links.map(({ section, icon }) => <a key={section} className={activeSection === section ? 'is-active' : ''} href={`#admin/${section}`}><span>{icon}</span> {adminSectionMeta[section].label}</a>)}
     </nav>
     <div className="admin-profile"><span>{user.name.slice(0, 2).toUpperCase()}</span><div><b>{user.name}</b><small>Administradora</small></div></div>
@@ -405,6 +413,38 @@ function LogsPanel({ logs, onDownload }: { logs: Log[], onDownload: () => void }
 }
 
 const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
+
+function ModuleVisual({ className }: { className: string }) {
+  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><i /><i /><i /><span>⌕ Izza</span></div>
+  if (className === 'module-card--accounting') return <div className="module-visual module-visual--accounting" aria-hidden="true"><span>F</span><span>C</span><span>DP</span><span>+</span></div>
+  if (className === 'module-card--mei') return <div className="module-visual module-visual--mei" aria-hidden="true"><span>MEI</span><i>→</i><span>DAS</span></div>
+  return <div className="module-visual module-visual--personal" aria-hidden="true"><span>✓ Lista da semana</span><span>○ Para comprar</span></div>
+}
+
+function ModuleHub() {
+  const session = getSession()
+
+  if (!session) return <main className="portal-page portal-page--centered"><BackToLanding /><section className="status-card"><p className="portal-eyebrow">Acesso restrito</p><h1>Faça login para acessar seus módulos.</h1><a className="portal-primary-button" href="#acesso">Ir para o acesso</a></section></main>
+
+  return <main className="modules-page">
+    <header className="modules-header">
+      <a href="#inicio" className="modules-header__brand"><PortalBrand /></a>
+      <div className="modules-header__actions">
+        {session.user.role === 'admin' && <a className="modules-admin-link" href="#admin/overview">Painel administrativo</a>}
+        <button type="button" onClick={() => { sessionStorage.removeItem(SESSION_KEY); window.location.hash = '#acesso' }}>Sair <span aria-hidden="true">↗</span></button>
+      </div>
+    </header>
+    <section className="modules-shell">
+      <div className="modules-hero"><div><p className="portal-eyebrow">Meu espaço Solutte</p><h1>Olá, {session.user.name.split(' ')[0]}.</h1><p>Escolha um módulo para continuar. Novos produtos aparecerão aqui assim que estiverem disponíveis para sua conta.</p></div><span aria-hidden="true">✦</span></div>
+      <section className="module-grid" aria-label="Módulos Solutte">
+        {modules.map((module, index) => <article className={`module-card ${module.className}`} key={module.name}>
+          <div className="module-card__content"><span className="module-card__number">0{index + 1}</span><p>{module.eyebrow}</p><h2>{module.name}</h2><span className={module.available ? 'module-status module-status--available' : 'module-status'}>{module.available ? 'Disponível' : 'Em breve'}</span><p className="module-card__description">{module.description}</p>{module.available && ORGANIZZA_URL ? <a className="module-open-link" href={ORGANIZZA_URL}>Abrir módulo <span aria-hidden="true">→</span></a> : <span className="module-open-link module-open-link--disabled">{module.available ? 'Preparando acesso' : 'Em desenvolvimento'}</span>}</div>
+          <ModuleVisual className={module.className} />
+        </article>)}
+      </section>
+    </section>
+  </main>
+}
 
 function AdminDashboard() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -504,6 +544,7 @@ function App() {
   }, [])
 
   if (route === '#acesso') return <AuthPortal />
+  if (route === '#modulos') return <ModuleHub />
   if (route.startsWith('#admin')) return <AdminDashboard />
   return <LandingPage />
 }
