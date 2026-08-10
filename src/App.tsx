@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { API_URL, SYSTEM_ACCESS_URL } from './config'
 
-const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-automations-logo-transparent.png`
+const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-logo-empresariais-transparent.png`
 
 type RevealProps = {
   children: ReactNode
