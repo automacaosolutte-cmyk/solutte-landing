@@ -69,6 +69,12 @@ function initializeSchema() {
         result_message TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
       )`,
+      `CREATE TABLE IF NOT EXISTS organiza_rules (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, terms TEXT NOT NULL DEFAULT '[]',
+        department TEXT NOT NULL CHECK (department IN ('contabil', 'fiscal', 'pessoal', 'juridico')),
+        active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )`,
       'CREATE INDEX IF NOT EXISTS idx_users_status ON users(account_status)',
       'CREATE INDEX IF NOT EXISTS idx_logs_created_at ON execution_logs(created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_devices_user ON organiza_devices(user_id)',
@@ -76,6 +82,7 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_user ON organiza_file_index(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_rules_user ON organiza_rules(user_id, active)',
     ], 'write')
   }
   return schemaReady
@@ -93,7 +100,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin)
     res.setHeader('Vary', 'Origin')
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
   }
   if (req.method === 'OPTIONS') return res.status(204).end()
   next()
@@ -107,6 +114,23 @@ const one = async (sql, args = []) => (await db.execute({ sql, args })).rows[0]
 const many = async (sql, args = []) => (await db.execute({ sql, args })).rows
 const asText = (value) => value == null ? '' : String(value)
 const asNumber = (value) => Number(value || 0)
+const normalizeClientName = (value) => asText(value)
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^A-Za-z0-9\s]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+const normalizeRuleTerm = (value) => normalizeClientName(value).toUpperCase()
+
+function publicRule(row) {
+  let terms = []
+  try { terms = JSON.parse(asText(row.terms) || '[]') } catch { terms = [] }
+  return {
+    id: asText(row.id), name: asText(row.name), terms: Array.isArray(terms) ? terms.map(asText).filter(Boolean) : [],
+    department: asText(row.department), active: Number(row.active) === 1,
+    createdAt: asText(row.created_at), updatedAt: asText(row.updated_at),
+  }
+}
 
 function publicUser(row) {
   return { id: asText(row.id), name: asText(row.name), email: asText(row.email), company: asText(row.company), role: asText(row.role), accountStatus: asText(row.account_status), paymentStatus: asText(row.payment_status), createdAt: asText(row.created_at) }
@@ -229,7 +253,7 @@ app.post('/api/organizza/clients/import', requireAuth, async (req, res, next) =>
     const seenCodes = new Set()
     const clients = source.map((raw, index) => {
       const code = typeof raw?.code === 'string' ? raw.code.trim().slice(0, 60) : ''
-      const legalName = typeof raw?.legalName === 'string' ? raw.legalName.trim().slice(0, 300) : ''
+      const legalName = typeof raw?.legalName === 'string' ? normalizeClientName(raw.legalName).slice(0, 300) : ''
       const cnpj = typeof raw?.cnpj === 'string' ? raw.cnpj.replace(/\D/g, '').slice(0, 14) : ''
       if (!code || !legalName) throw new Error(`Linha ${index + 2}: informe código e razão social.`)
       if (seenCodes.has(code.toLocaleLowerCase())) throw new Error(`O código ${code} está repetido na planilha.`)
@@ -245,6 +269,52 @@ app.post('/api/organizza/clients/import', requireAuth, async (req, res, next) =>
     if (error instanceof Error && (/^Linha /.test(error.message) || /repetido/.test(error.message))) return res.status(400).json({ error: error.message })
     next(error)
   }
+})
+
+app.get('/api/organizza/rules', requireAuth, async (req, res, next) => {
+  try {
+    const rules = await many('SELECT * FROM organiza_rules WHERE user_id = ? ORDER BY created_at DESC', [asText(req.user.id)])
+    res.json({ rules: rules.map(publicRule) })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/rules', requireAuth, async (req, res, next) => {
+  try {
+    const { name, department } = req.body || {}
+    const rawTerms = Array.isArray(req.body?.terms) ? req.body.terms : asText(req.body?.terms).split(',')
+    const terms = [...new Set(rawTerms.map(normalizeRuleTerm).filter(Boolean))].slice(0, 12)
+    if (typeof name !== 'string' || !name.trim() || !['contabil', 'fiscal', 'pessoal', 'juridico'].includes(department) || !terms.length) {
+      return res.status(400).json({ error: 'Informe um nome, ao menos um termo e um departamento válido.' })
+    }
+    const rule = { id: id(), userId: asText(req.user.id), name: name.trim().slice(0, 120), terms, department }
+    await db.execute({ sql: 'INSERT INTO organiza_rules (id, user_id, name, terms, department, updated_at) VALUES (?, ?, ?, ?, ?, ?)', args: [rule.id, rule.userId, rule.name, JSON.stringify(rule.terms), rule.department, now()] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), rule.userId, 'rules.created', 'success', `Regra "${rule.name}" criada para o Organizza.`, JSON.stringify({ ruleId: rule.id, department: rule.department, terms: rule.terms })] })
+    res.status(201).json({ rule: publicRule(await one('SELECT * FROM organiza_rules WHERE id = ?', [rule.id])) })
+  } catch (error) { next(error) }
+})
+
+app.delete('/api/organizza/rules/:id', requireAuth, async (req, res, next) => {
+  try {
+    const rule = await one('SELECT * FROM organiza_rules WHERE id = ? AND user_id = ?', [req.params.id, asText(req.user.id)])
+    if (!rule) return res.status(404).json({ error: 'Regra não encontrada.' })
+    await db.execute({ sql: 'DELETE FROM organiza_rules WHERE id = ?', args: [asText(rule.id)] })
+    res.json({ ok: true })
+  } catch (error) { next(error) }
+})
+
+app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    await db.batch([
+      { sql: 'DELETE FROM organiza_file_index WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_commands WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_events WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_rules WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_devices WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_clients WHERE user_id = ?', args: [userId] },
+    ], 'write')
+    res.json({ ok: true })
+  } catch (error) { next(error) }
 })
 
 app.post('/api/organizza/commands/create-structure', requireAuth, async (req, res, next) => {
@@ -291,6 +361,20 @@ app.patch('/api/organizza/devices/heartbeat', requireDeviceAuth, async (req, res
     const rootPath = typeof req.body?.clientsRootPath === 'string' ? req.body.clientsRootPath.trim().slice(0, 1000) : null
     await db.execute({ sql: "UPDATE organiza_devices SET status = 'connected', clients_root_path = COALESCE(?, clients_root_path), last_seen_at = ?, updated_at = ? WHERE id = ?", args: [rootPath || null, now(), now(), asText(req.device.id)] })
     res.json({ device: publicDevice(await one('SELECT * FROM organiza_devices WHERE id = ?', [asText(req.device.id)])) })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/organizza/processing-config', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const [clients, rules] = await Promise.all([
+      many('SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ? ORDER BY code ASC', [userId]),
+      many('SELECT * FROM organiza_rules WHERE user_id = ? AND active = 1 ORDER BY created_at ASC', [userId]),
+    ])
+    res.json({
+      clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) })),
+      rules: rules.map(publicRule),
+    })
   } catch (error) { next(error) }
 })
 

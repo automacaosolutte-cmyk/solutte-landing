@@ -150,7 +150,7 @@ function LandingPage() {
         <div className="product-grid">
           <Reveal className="product-card product-card--organizza" delay={40}>
             <div className="card-copy"><span className="card-kicker">Solutte Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
-            <div className="organizza-visual" aria-hidden="true"><span className="folder folder--one" /><span className="folder folder--two" /><span className="folder folder--three" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
+            <div className="organizza-visual" aria-hidden="true"><img src="/assets/solutte-organizza-mark.png" alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
           </Reveal>
           <Reveal className="product-card product-card--accounting" delay={110}>
             <div className="card-copy"><span className="card-kicker">Solutte Contábil</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
@@ -415,7 +415,7 @@ function LogsPanel({ logs, onDownload }: { logs: Log[], onDownload: () => void }
 const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value)
 
 function ModuleVisual({ className }: { className: string }) {
-  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><i /><i /><i /><span>⌕ Izza</span></div>
+  if (className === 'module-card--organizza') return <div className="module-visual module-visual--organizza" aria-hidden="true"><img src="/assets/solutte-organizza-mark.png" alt="" /><span>⌕ Izza</span></div>
   if (className === 'module-card--accounting') return <div className="module-visual module-visual--accounting" aria-hidden="true"><span>F</span><span>C</span><span>DP</span><span>+</span></div>
   if (className === 'module-card--mei') return <div className="module-visual module-visual--mei" aria-hidden="true"><span>MEI</span><i>→</i><span>DAS</span></div>
   return <div className="module-visual module-visual--personal" aria-hidden="true"><span>✓ Lista da semana</span><span>○ Para comprar</span></div>
