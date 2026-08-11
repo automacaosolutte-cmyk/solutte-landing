@@ -75,6 +75,16 @@ function initializeSchema() {
         active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
       )`,
+      `CREATE TABLE IF NOT EXISTS organiza_folder_structures (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT, name TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('standard', 'custom', 'existing')),
+        root_path TEXT NOT NULL DEFAULT '', folder_count INTEGER NOT NULL DEFAULT 0, scanned_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS organiza_folder_nodes (
+        id TEXT PRIMARY KEY, structure_id TEXT NOT NULL, client_id TEXT, relative_path TEXT NOT NULL, parent_path TEXT NOT NULL DEFAULT '',
+        folder_name TEXT NOT NULL, depth INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (structure_id, relative_path), FOREIGN KEY (structure_id) REFERENCES organiza_folder_structures(id), FOREIGN KEY (client_id) REFERENCES organiza_clients(id)
+      )`,
       'CREATE INDEX IF NOT EXISTS idx_users_status ON users(account_status)',
       'CREATE INDEX IF NOT EXISTS idx_logs_created_at ON execution_logs(created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_devices_user ON organiza_devices(user_id)',
@@ -83,7 +93,18 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_rules_user ON organiza_rules(user_id, active)',
-    ], 'write')
+      'CREATE INDEX IF NOT EXISTS idx_organiza_structures_user ON organiza_folder_structures(user_id, updated_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_nodes_structure ON organiza_folder_nodes(structure_id, depth)',
+    ], 'write').then(async () => {
+      for (const sql of [
+        "ALTER TABLE organiza_rules ADD COLUMN destination_path TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE organiza_devices ADD COLUMN structure_mode TEXT NOT NULL DEFAULT 'standard'",
+      ]) {
+        try { await db.execute(sql) } catch (error) {
+          if (!/duplicate|already exists/i.test(String(error))) throw error
+        }
+      }
+    })
   }
   return schemaReady
 }
@@ -127,7 +148,7 @@ function publicRule(row) {
   try { terms = JSON.parse(asText(row.terms) || '[]') } catch { terms = [] }
   return {
     id: asText(row.id), name: asText(row.name), terms: Array.isArray(terms) ? terms.map(asText).filter(Boolean) : [],
-    department: asText(row.department), active: Number(row.active) === 1,
+    department: asText(row.department), destinationPath: asText(row.destination_path), active: Number(row.active) === 1,
     createdAt: asText(row.created_at), updatedAt: asText(row.updated_at),
   }
 }
@@ -160,8 +181,16 @@ function requireAdmin(req, res, next) {
 function publicDevice(row) {
   return {
     id: asText(row.id), name: asText(row.name), platform: asText(row.platform), appVersion: asText(row.app_version),
-    status: asText(row.status), clientsRootPath: row.clients_root_path ? asText(row.clients_root_path) : null,
+    status: asText(row.status), clientsRootPath: row.clients_root_path ? asText(row.clients_root_path) : null, structureMode: asText(row.structure_mode || 'standard'),
     createdAt: asText(row.created_at), lastSeenAt: row.last_seen_at ? asText(row.last_seen_at) : null,
+  }
+}
+
+function publicStructure(row) {
+  return {
+    id: asText(row.id), name: asText(row.name), mode: asText(row.mode), rootPath: asText(row.root_path),
+    folderCount: asNumber(row.folder_count), deviceId: row.device_id ? asText(row.device_id) : null,
+    scannedAt: row.scanned_at ? asText(row.scanned_at) : null, updatedAt: asText(row.updated_at),
   }
 }
 
@@ -271,6 +300,50 @@ app.post('/api/organizza/clients/import', requireAuth, async (req, res, next) =>
   }
 })
 
+app.get('/api/organizza/structures', requireAuth, async (req, res, next) => {
+  try {
+    const structures = await many('SELECT * FROM organiza_folder_structures WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20', [asText(req.user.id)])
+    const selected = structures[0]
+    const nodes = selected ? await many('SELECT client_id AS clientId, relative_path AS relativePath, parent_path AS parentPath, folder_name AS folderName, depth FROM organiza_folder_nodes WHERE structure_id = ? ORDER BY depth, relative_path LIMIT 5000', [asText(selected.id)]) : []
+    res.json({ structures: structures.map(publicStructure), activeStructure: selected ? { ...publicStructure(selected), nodes: nodes.map((node) => ({ clientId: node.clientId ? asText(node.clientId) : null, relativePath: asText(node.relativePath), parentPath: asText(node.parentPath), folderName: asText(node.folderName), depth: asNumber(node.depth) })) } : null })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/structures/sync', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const mode = req.body?.mode
+    const rootPath = typeof req.body?.rootPath === 'string' ? req.body.rootPath.trim().slice(0, 1000) : ''
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 120) : 'Estrutura de pastas'
+    const rawNodes = Array.isArray(req.body?.nodes) ? req.body.nodes.slice(0, 5000) : []
+    if (!['existing', 'standard', 'custom'].includes(mode) || !rootPath) return res.status(400).json({ error: 'Informe o modo e a pasta raiz da estrutura.' })
+    const clientIds = new Set((await many('SELECT id FROM organiza_clients WHERE user_id = ?', [asText(req.user.id)])).map((client) => asText(client.id)))
+    const nodes = rawNodes.map((raw) => {
+      const relativePath = typeof raw?.relativePath === 'string' ? raw.relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 1000) : ''
+      const parentPath = typeof raw?.parentPath === 'string' ? raw.parentPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 1000) : ''
+      const folderName = typeof raw?.folderName === 'string' ? raw.folderName.trim().slice(0, 240) : ''
+      const depth = Number(raw?.depth)
+      const clientId = typeof raw?.clientId === 'string' && clientIds.has(raw.clientId) ? raw.clientId : null
+      if (!relativePath || !folderName || !Number.isInteger(depth) || depth < 1 || relativePath.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('A árvore de pastas recebida é inválida.')
+      return { relativePath, parentPath, folderName, depth, clientId }
+    })
+    const userId = asText(req.user.id); const deviceId = asText(req.device.id)
+    let structure = await one('SELECT * FROM organiza_folder_structures WHERE user_id = ? AND device_id = ? AND root_path = ? ORDER BY updated_at DESC LIMIT 1', [userId, deviceId, rootPath])
+    if (!structure) {
+      const structureId = id()
+      await db.execute({ sql: 'INSERT INTO organiza_folder_structures (id, user_id, device_id, name, mode, root_path, folder_count, scanned_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', args: [structureId, userId, deviceId, name || 'Estrutura de pastas', mode, rootPath, nodes.length, now(), now()] })
+      structure = await one('SELECT * FROM organiza_folder_structures WHERE id = ?', [structureId])
+    } else {
+      await db.execute({ sql: 'UPDATE organiza_folder_structures SET name = ?, mode = ?, folder_count = ?, scanned_at = ?, updated_at = ? WHERE id = ?', args: [name || asText(structure.name), mode, nodes.length, now(), now(), asText(structure.id)] })
+      await db.execute({ sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id = ?', args: [asText(structure.id)] })
+      structure = await one('SELECT * FROM organiza_folder_structures WHERE id = ?', [asText(structure.id)])
+    }
+    if (nodes.length) await db.batch(nodes.map((node) => ({ sql: 'INSERT INTO organiza_folder_nodes (id, structure_id, client_id, relative_path, parent_path, folder_name, depth) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(structure.id), node.clientId, node.relativePath, node.parentPath, node.folderName, node.depth] })), 'write')
+    await db.execute({ sql: "UPDATE organiza_devices SET structure_mode = ?, clients_root_path = ?, updated_at = ? WHERE id = ?", args: [mode, rootPath, now(), deviceId] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, deviceId, 'structure.scanned', 'success', `${nodes.length} pasta(s) da estrutura foram registradas sem leitura de arquivos.`, JSON.stringify({ structureId: asText(structure.id), mode, folderCount: nodes.length })] })
+    res.status(201).json({ structure: publicStructure(structure) })
+  } catch (error) { next(error) }
+})
+
 app.get('/api/organizza/rules', requireAuth, async (req, res, next) => {
   try {
     const rules = await many('SELECT * FROM organiza_rules WHERE user_id = ? ORDER BY created_at DESC', [asText(req.user.id)])
@@ -281,13 +354,15 @@ app.get('/api/organizza/rules', requireAuth, async (req, res, next) => {
 app.post('/api/organizza/rules', requireAuth, async (req, res, next) => {
   try {
     const { name, department } = req.body || {}
+    const destinationPath = typeof req.body?.destinationPath === 'string' ? req.body.destinationPath.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 600) : ''
     const rawTerms = Array.isArray(req.body?.terms) ? req.body.terms : asText(req.body?.terms).split(',')
     const terms = [...new Set(rawTerms.map(normalizeRuleTerm).filter(Boolean))].slice(0, 12)
     if (typeof name !== 'string' || !name.trim() || !['contabil', 'fiscal', 'pessoal', 'juridico'].includes(department) || !terms.length) {
       return res.status(400).json({ error: 'Informe um nome, ao menos um termo e um departamento válido.' })
     }
-    const rule = { id: id(), userId: asText(req.user.id), name: name.trim().slice(0, 120), terms, department }
-    await db.execute({ sql: 'INSERT INTO organiza_rules (id, user_id, name, terms, department, updated_at) VALUES (?, ?, ?, ?, ?, ?)', args: [rule.id, rule.userId, rule.name, JSON.stringify(rule.terms), rule.department, now()] })
+    if (destinationPath.split('/').some((segment) => segment === '..')) return res.status(400).json({ error: 'O destino relativo não pode conter ..' })
+    const rule = { id: id(), userId: asText(req.user.id), name: name.trim().slice(0, 120), terms, department, destinationPath }
+    await db.execute({ sql: 'INSERT INTO organiza_rules (id, user_id, name, terms, department, destination_path, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [rule.id, rule.userId, rule.name, JSON.stringify(rule.terms), rule.department, rule.destinationPath, now()] })
     await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), rule.userId, 'rules.created', 'success', `Regra "${rule.name}" criada para o Organizza.`, JSON.stringify({ ruleId: rule.id, department: rule.department, terms: rule.terms })] })
     res.status(201).json({ rule: publicRule(await one('SELECT * FROM organiza_rules WHERE id = ?', [rule.id])) })
   } catch (error) { next(error) }
@@ -306,6 +381,8 @@ app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
   try {
     const userId = asText(req.user.id)
     await db.batch([
+      { sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id IN (SELECT id FROM organiza_folder_structures WHERE user_id = ?)', args: [userId] },
+      { sql: 'DELETE FROM organiza_folder_structures WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_file_index WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_commands WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_events WHERE user_id = ?', args: [userId] },
@@ -321,6 +398,10 @@ app.post('/api/organizza/commands/create-structure', requireAuth, async (req, re
   try {
     const userId = asText(req.user.id)
     const { deviceId, clientIds } = req.body || {}
+    const mode = req.body?.mode === 'custom' ? 'custom' : 'standard'
+    const rawPaths = Array.isArray(req.body?.paths) ? req.body.paths : []
+    const paths = [...new Set(rawPaths.filter((value) => typeof value === 'string').map((value) => value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')).filter((value) => value && !value.split('/').includes('..')).slice(0, 80))]
+    if (mode === 'custom' && !paths.length) return res.status(400).json({ error: 'Informe ao menos uma pasta ou subpasta para o modelo personalizado.' })
     const device = typeof deviceId === 'string' ? await one("SELECT * FROM organiza_devices WHERE id = ? AND user_id = ? AND status != 'revoked'", [deviceId, userId]) : null
     if (!device) return res.status(400).json({ error: 'Selecione um computador conectado para criar as pastas.' })
     const selectedIds = Array.isArray(clientIds) ? clientIds.filter((clientId) => typeof clientId === 'string' && clientId).slice(0, 2_000) : []
@@ -329,8 +410,8 @@ app.post('/api/organizza/commands/create-structure', requireAuth, async (req, re
     if (!clients.length) return res.status(400).json({ error: 'Importe ao menos um cliente antes de criar a estrutura.' })
     if (selectedIds.length && clients.length !== selectedIds.length) return res.status(400).json({ error: 'Um ou mais clientes selecionados não pertencem à sua conta.' })
     const command = { id: id(), year: new Date().getFullYear(), clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) })) }
-    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [command.id, userId, asText(device.id), 'structure.create_standard', JSON.stringify({ year: command.year, clients: command.clients })] })
-    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.requested', 'info', `Criação da estrutura padrão solicitada para ${clients.length} cliente(s).`, JSON.stringify({ commandId: command.id, count: clients.length })] })
+    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [command.id, userId, asText(device.id), 'structure.create', JSON.stringify({ year: command.year, clients: command.clients, mode, paths })] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.requested', 'info', `Criação de estrutura ${mode === 'custom' ? 'personalizada' : 'padrão'} solicitada para ${clients.length} cliente(s).`, JSON.stringify({ commandId: command.id, count: clients.length, mode })] })
     res.status(201).json({ command: { id: command.id, clients: clients.length, year: command.year } })
   } catch (error) { next(error) }
 })
@@ -359,7 +440,8 @@ app.post('/api/organizza/devices/pair', requireAuth, async (req, res, next) => {
 app.patch('/api/organizza/devices/heartbeat', requireDeviceAuth, async (req, res, next) => {
   try {
     const rootPath = typeof req.body?.clientsRootPath === 'string' ? req.body.clientsRootPath.trim().slice(0, 1000) : null
-    await db.execute({ sql: "UPDATE organiza_devices SET status = 'connected', clients_root_path = COALESCE(?, clients_root_path), last_seen_at = ?, updated_at = ? WHERE id = ?", args: [rootPath || null, now(), now(), asText(req.device.id)] })
+    const structureMode = ['standard', 'custom', 'existing'].includes(req.body?.structureMode) ? req.body.structureMode : null
+    await db.execute({ sql: "UPDATE organiza_devices SET status = 'connected', clients_root_path = COALESCE(?, clients_root_path), structure_mode = COALESCE(?, structure_mode), last_seen_at = ?, updated_at = ? WHERE id = ?", args: [rootPath || null, structureMode, now(), now(), asText(req.device.id)] })
     res.json({ device: publicDevice(await one('SELECT * FROM organiza_devices WHERE id = ?', [asText(req.device.id)])) })
   } catch (error) { next(error) }
 })
@@ -367,13 +449,17 @@ app.patch('/api/organizza/devices/heartbeat', requireDeviceAuth, async (req, res
 app.get('/api/organizza/processing-config', requireDeviceAuth, async (req, res, next) => {
   try {
     const userId = asText(req.user.id)
-    const [clients, rules] = await Promise.all([
+    const [clients, rules, structures] = await Promise.all([
       many('SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ? ORDER BY code ASC', [userId]),
       many('SELECT * FROM organiza_rules WHERE user_id = ? AND active = 1 ORDER BY created_at ASC', [userId]),
+      many('SELECT * FROM organiza_folder_structures WHERE user_id = ? AND device_id = ? ORDER BY updated_at DESC LIMIT 1', [userId, asText(req.device.id)]),
     ])
+    const structure = structures[0]
+    const clientFolders = structure ? await many('SELECT client_id AS clientId, relative_path AS relativePath FROM organiza_folder_nodes WHERE structure_id = ? AND client_id IS NOT NULL ORDER BY depth, relative_path', [asText(structure.id)]) : []
     res.json({
       clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) })),
       rules: rules.map(publicRule),
+      structure: structure ? { mode: asText(structure.mode), rootPath: asText(structure.root_path), clientFolders: clientFolders.map((folder) => ({ clientId: asText(folder.clientId), relativePath: asText(folder.relativePath) })) } : null,
     })
   } catch (error) { next(error) }
 })
