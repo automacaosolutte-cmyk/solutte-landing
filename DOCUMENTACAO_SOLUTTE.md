@@ -16,7 +16,7 @@ Endereços publicados:
 
 - Site/API: `https://solutte-automations.vercel.app`
 - Painel Organizza: `https://solutte-automations.vercel.app/organizza/`
-- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.8.exe`
+- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.9.exe`
 
 ## 2. Estado atual e limites importantes
 
