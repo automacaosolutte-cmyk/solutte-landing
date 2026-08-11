@@ -17,6 +17,10 @@ const benefits = [
   ['04', 'Praticidade', 'Processos simples para uma rotina mais leve e produtiva.'],
 ]
 
+function SolutteLogo() {
+  return <a className="brand brand--full" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial"><img className="brand__full-lockup" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></a>
+}
+
 function Reveal({ children, className = '', delay = 0 }: RevealProps) {
   const element = useRef<HTMLDivElement>(null)
 
@@ -35,14 +39,6 @@ function Reveal({ children, className = '', delay = 0 }: RevealProps) {
     <div ref={element} className={`reveal ${className}`} style={{ transitionDelay: `${delay}ms` }}>
       {children}
     </div>
-  )
-}
-
-function SolutteLogo() {
-  return (
-    <a className="brand brand--full" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial">
-      <img className="brand__full-lockup" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" />
-    </a>
   )
 }
 
@@ -67,8 +63,7 @@ function ThemeToggle() {
 function LandingPage() {
   return (
     <main>
-      <header className="site-header">
-        <SolutteLogo />
+      <header className="site-header site-header--menu">
         <nav className="site-nav" aria-label="Navegação principal">
           <a href="#solucoes">Soluções</a>
           <a href="#produtos">Produtos</a>

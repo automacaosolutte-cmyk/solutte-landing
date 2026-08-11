@@ -575,23 +575,63 @@ app.post('/api/organizza/izza/search', requireAuth, async (req, res, next) => {
     if (candidates.size > 1) return res.json({ query, deterministic: true, summary: `Encontrei ${candidates.size} empresas possíveis. Informe o código ou CNPJ completo para a Izza não abrir o documento errado.`, results: [] })
     const [clientId, client] = [...candidates.entries()][0]
     const clientWords = new Set([asText(client.code), asText(client.cnpj), ...normalizeSearchText(asText(client.legalName)).split(/\s+/)])
-    const ignored = new Set(['ME', 'DO', 'DA', 'DE', 'EM', 'PARA', 'COM', 'QUE', 'UM', 'UMA', 'O', 'A', ...Object.keys(namedMonths), String(requestedYear)])
+    const ignored = new Set(['ME', 'DO', 'DA', 'DE', 'EM', 'PARA', 'COM', 'QUE', 'UM', 'UMA', 'O', 'A', 'EMPRESA', 'DOCUMENTO', 'ARQUIVO', ...Object.keys(namedMonths), String(requestedYear)])
     const documentTerms = text.split(/\s+/).filter((term) => term.length >= 3 && !ignored.has(term) && !clientWords.has(term) && !/^\d+$/.test(term)).slice(0, 8)
-    const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department,
+    const defaultDocumentRules = [
+      { name: 'DASMEI', terms: ['DASMEI'], department: 'fiscal' }, { name: 'DAS', terms: ['DAS'], department: 'fiscal' },
+      { name: 'DARF', terms: ['DARF'], department: 'fiscal' }, { name: 'DCTF', terms: ['DCTF'], department: 'fiscal' },
+      { name: 'EFD', terms: ['EFD'], department: 'fiscal' }, { name: 'SPED', terms: ['SPED'], department: 'fiscal' },
+      { name: 'Balancete', terms: ['BALANCETE'], department: 'contabil' }, { name: 'Relatório financeiro', terms: ['RELATORIO', 'FINANCEIRO'], department: 'contabil' }, { name: 'Extrato bancário', terms: ['EXTRATO'], department: 'contabil' },
+      { name: 'Folha de pagamento', terms: ['FOLHA'], department: 'pessoal' }, { name: 'Holerite', terms: ['HOLERITE'], department: 'pessoal' }, { name: 'Contrato', terms: ['CONTRATO'], department: 'juridico' },
+    ]
+    const configuredRules = (await many('SELECT name, terms, department FROM organiza_rules WHERE user_id = ? AND active = 1 ORDER BY created_at ASC', [userId])).map((rule) => {
+      let terms = []
+      try { terms = JSON.parse(asText(rule.terms) || '[]') } catch { terms = [] }
+      return { name: asText(rule.name), terms: Array.isArray(terms) ? terms.map(normalizeSearchText).filter(Boolean) : [], department: asText(rule.department) }
+    }).filter((rule) => rule.terms.length && ['contabil', 'fiscal', 'pessoal', 'juridico'].includes(rule.department))
+    const knownRules = [...configuredRules, ...defaultDocumentRules]
+    const recognizedRule = knownRules.find((rule) => rule.terms.every((term) => text.includes(normalizeSearchText(term)))) || null
+    const departmentTerms = {
+      juridico: ['CONTRATO', 'PROCURACAO', 'ALTERACAO CONTRATUAL'],
+      pessoal: ['FOLHA', 'HOLERITE', 'ESOCIAL', 'FGTS', 'FERIAS', 'ADMISSAO', 'RESCISAO'],
+      contabil: ['BALANCETE', 'BALANCO', 'EXTRATO', 'RELATORIO FINANCEIRO', 'RAZAO', 'DIARIO'],
+      fiscal: ['DASMEI', 'DAS', 'DARF', 'DCTF', 'EFD', 'SPED', 'NOTA FISCAL', 'ICMS', 'ISS', 'CSLL'],
+    }
+    const inferredDepartment = recognizedRule?.department || Object.entries(departmentTerms).find(([, terms]) => terms.some((term) => text.includes(term)))?.[0] || ''
+    const suggestedFolder = inferredDepartment ? {
+      client: { id: asText(client.id), code: asText(client.code).startsWith('SEM-CODIGO-') ? '' : asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) },
+      department: inferredDepartment,
+      competence: requestedYear && (competence?.month || namedMonth) ? `${String(competence?.month || namedMonth).padStart(2, '0')}${requestedYear}` : '',
+    } : null
+    const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.client_id AS clientId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department,
       f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
       c.code, c.legal_name AS legalName, c.cnpj
       FROM organiza_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
-      WHERE f.user_id = ? AND f.client_id = ? ORDER BY f.indexed_at DESC LIMIT 1000`, [userId, clientId])
+      WHERE f.user_id = ? ORDER BY f.indexed_at DESC LIMIT 5000`, [userId])
+    const clientCode = asText(client.code)
+    const clientCodePattern = clientCode && !clientCode.startsWith('SEM-CODIGO-') ? new RegExp(`(?:^|[^A-Z0-9])${normalizeSearchText(clientCode).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Z0-9])`) : null
+    const clientName = normalizeSearchText(asText(client.legalName))
+    const clientCnpj = asText(client.cnpj).replace(/\D/g, '')
+    const belongsToClient = (row) => {
+      if (asText(row.clientId) === clientId) return true
+      const rowText = normalizeSearchText(`${asText(row.relativePath)} ${asText(row.fileName)}`)
+      const rowDigits = `${asText(row.relativePath)} ${asText(row.fileName)}`.replace(/\D/g, '')
+      return Boolean((clientCodePattern && clientCodePattern.test(rowText)) || (clientCnpj && rowDigits.includes(clientCnpj)) || (clientName.length >= 4 && rowText.includes(clientName)))
+    }
     const exact = rows.filter((row) => {
+      if (!belongsToClient(row)) return false
       const documentText = normalizeSearchText(`${asText(row.fileName)} ${asText(row.documentType)}`)
-      if (documentTerms.length && !documentTerms.every((term) => documentText.includes(term))) return false
+      const termsToValidate = recognizedRule ? recognizedRule.terms : documentTerms
+      if (termsToValidate.length && !termsToValidate.every((term) => documentText.includes(normalizeSearchText(term)))) return false
+      if (recognizedRule?.department && asText(row.department) && asText(row.department) !== recognizedRule.department) return false
       if (competence && (asNumber(row.competenceMonth) !== competence.month || asNumber(row.competenceYear) !== competence.year)) return false
       if (namedMonth && asNumber(row.competenceMonth) !== namedMonth) return false
       if (requestedYear && asNumber(row.competenceYear) !== requestedYear) return false
       return true
     })
-    if (namedMonth && !requestedYear && new Set(exact.map((row) => asNumber(row.competenceYear)).filter(Boolean)).size > 1) return res.json({ query, deterministic: true, summary: `Há documentos de ${Object.keys(namedMonths).find((name) => namedMonths[name] === namedMonth)?.toLowerCase()} em mais de um ano para ${asText(client.legalName)}. Informe também o ano, por exemplo 052026.`, results: [] })
-    if (!exact.length) return res.json({ query, deterministic: true, summary: `Nenhum documento exato foi localizado para ${asText(client.legalName)}. Confira o tipo do documento e a competência.`, results: [] })
+    if (namedMonth && !requestedYear && new Set(exact.map((row) => asNumber(row.competenceYear)).filter(Boolean)).size > 1) return res.json({ query, deterministic: true, summary: `Há documentos de ${Object.keys(namedMonths).find((name) => namedMonths[name] === namedMonth)?.toLowerCase()} em mais de um ano para ${asText(client.legalName)}. Informe também o ano, por exemplo 052026.`, results: [], suggestedFolder })
+    if (!recognizedRule && documentTerms.length) return res.json({ query, deterministic: true, summary: `Reconheci ${asText(client.legalName)}, mas o tipo de documento não corresponde a uma regra cadastrada. Cadastre ou confira a regra de leitura antes de pedir esse documento.`, results: [], suggestedFolder })
+    if (!exact.length) return res.json({ query, deterministic: true, summary: `Reconheci ${asText(client.legalName)} e a regra “${recognizedRule?.name || 'documento informado'}”, mas não encontrei um arquivo nessa competência. ${suggestedFolder ? 'Posso abrir a pasta sugerida para você conferir ou incluir o arquivo.' : 'Confira a competência informada.'}`, results: [], suggestedFolder })
     if (exact.length > 1) return res.json({ query, deterministic: true, summary: `Encontrei ${exact.length} documentos possíveis para ${asText(client.legalName)}. Informe mais um detalhe do nome ou a competência completa para a Izza retornar um único arquivo.`, results: [] })
     const results = exact.map((row) => ({
       id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
