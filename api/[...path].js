@@ -75,6 +75,14 @@ function initializeSchema() {
         active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
       )`,
+      `CREATE TABLE IF NOT EXISTS organiza_pending_files (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL, file_name TEXT NOT NULL, relative_path TEXT NOT NULL,
+        reason TEXT NOT NULL, detected_client_id TEXT, detected_cnpj TEXT NOT NULL DEFAULT '', detected_competence TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK (status IN ('pending', 'resolution_requested', 'resolved')) DEFAULT 'pending',
+        resolution TEXT NOT NULL DEFAULT '{}', destination_path TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id), FOREIGN KEY (detected_client_id) REFERENCES organiza_clients(id)
+      )`,
       `CREATE TABLE IF NOT EXISTS organiza_folder_structures (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT, name TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('standard', 'custom', 'existing')),
         root_path TEXT NOT NULL DEFAULT '', folder_count INTEGER NOT NULL DEFAULT 0, scanned_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -93,6 +101,7 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_rules_user ON organiza_rules(user_id, active)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_pending_user_status ON organiza_pending_files(user_id, status, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_structures_user ON organiza_folder_structures(user_id, updated_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_nodes_structure ON organiza_folder_nodes(structure_id, depth)',
     ], 'write').then(async () => {
@@ -191,6 +200,17 @@ function publicStructure(row) {
     id: asText(row.id), name: asText(row.name), mode: asText(row.mode), rootPath: asText(row.root_path),
     folderCount: asNumber(row.folder_count), deviceId: row.device_id ? asText(row.device_id) : null,
     scannedAt: row.scanned_at ? asText(row.scanned_at) : null, updatedAt: asText(row.updated_at),
+  }
+}
+
+function publicPendingFile(row) {
+  let resolution = {}
+  try { resolution = JSON.parse(asText(row.resolution) || '{}') } catch { resolution = {} }
+  return {
+    id: asText(row.id), deviceId: asText(row.device_id), fileName: asText(row.file_name), relativePath: asText(row.relative_path),
+    reason: asText(row.reason), detectedClientId: row.detected_client_id ? asText(row.detected_client_id) : null,
+    detectedCnpj: asText(row.detected_cnpj), detectedCompetence: asText(row.detected_competence), status: asText(row.status),
+    resolution, destinationPath: asText(row.destination_path), createdAt: asText(row.created_at), resolvedAt: row.resolved_at ? asText(row.resolved_at) : null,
   }
 }
 
@@ -377,6 +397,74 @@ app.delete('/api/organizza/rules/:id', requireAuth, async (req, res, next) => {
   } catch (error) { next(error) }
 })
 
+app.get('/api/organizza/pending-files', requireAuth, async (req, res, next) => {
+  try {
+    const rows = await many("SELECT * FROM organiza_pending_files WHERE user_id = ? AND status IN ('pending', 'resolution_requested') ORDER BY created_at DESC LIMIT 100", [asText(req.user.id)])
+    res.json({ pendingFiles: rows.map(publicPendingFile) })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/pending-files', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName.trim().slice(0, 500) : ''
+    const relativePath = typeof req.body?.relativePath === 'string' ? req.body.relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 1000) : ''
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 1000) : ''
+    const detectedClientId = typeof req.body?.detectedClientId === 'string' ? req.body.detectedClientId : null
+    const detectedCnpj = typeof req.body?.detectedCnpj === 'string' ? req.body.detectedCnpj.replace(/\D/g, '').slice(0, 14) : ''
+    const detectedCompetence = typeof req.body?.detectedCompetence === 'string' ? req.body.detectedCompetence.replace(/\D/g, '').slice(0, 6) : ''
+    if (!fileName || !relativePath || !reason || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return res.status(400).json({ error: 'Dados do arquivo pendente são inválidos.' })
+    const client = detectedClientId ? await one('SELECT id FROM organiza_clients WHERE id = ? AND user_id = ?', [detectedClientId, asText(req.user.id)]) : null
+    const pendingId = id()
+    await db.execute({ sql: 'INSERT INTO organiza_pending_files (id, user_id, device_id, file_name, relative_path, reason, detected_client_id, detected_cnpj, detected_competence, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', args: [pendingId, asText(req.user.id), asText(req.device.id), fileName, relativePath, reason, client ? asText(client.id) : null, detectedCnpj, detectedCompetence, now()] })
+    res.status(201).json({ pendingFile: publicPendingFile(await one('SELECT * FROM organiza_pending_files WHERE id = ?', [pendingId])) })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/pending-files/:id/resolve', requireAuth, async (req, res, next) => {
+  try {
+    const pending = await one("SELECT * FROM organiza_pending_files WHERE id = ? AND user_id = ? AND status = 'pending'", [req.params.id, asText(req.user.id)])
+    if (!pending) return res.status(404).json({ error: 'Arquivo pendente não encontrado ou já está em tratamento.' })
+    const clientId = typeof req.body?.clientId === 'string' ? req.body.clientId : ''
+    const department = req.body?.department
+    const competence = typeof req.body?.competence === 'string' ? req.body.competence.replace(/\D/g, '') : ''
+    const destinationPath = typeof req.body?.destinationPath === 'string' ? req.body.destinationPath.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 600) : ''
+    const createRule = Boolean(req.body?.createRule)
+    const client = await one('SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE id = ? AND user_id = ?', [clientId, asText(req.user.id)])
+    if (!client || !['contabil', 'fiscal', 'pessoal', 'juridico'].includes(department)) return res.status(400).json({ error: 'Informe um cliente e departamento válidos.' })
+    if (department !== 'juridico' && !/^(0[1-9]|1[0-2])20\d{2}$/.test(competence)) return res.status(400).json({ error: 'Informe a competência no formato MMYYYY.' })
+    if (destinationPath.split('/').some((segment) => segment === '..')) return res.status(400).json({ error: 'O destino não pode conter ..' })
+    let createdRule = null
+    if (createRule) {
+      const ruleName = typeof req.body?.ruleName === 'string' ? req.body.ruleName.trim().slice(0, 120) : ''
+      const rawTerms = Array.isArray(req.body?.terms) ? req.body.terms : asText(req.body?.terms).split(',')
+      const terms = [...new Set(rawTerms.map(normalizeRuleTerm).filter(Boolean))].slice(0, 12)
+      if (!ruleName || !terms.length) return res.status(400).json({ error: 'Para cadastrar um padrão, informe o nome e ao menos um termo.' })
+      createdRule = { id: id(), name: ruleName, terms, department, destinationPath }
+      await db.execute({ sql: 'INSERT INTO organiza_rules (id, user_id, name, terms, department, destination_path, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [createdRule.id, asText(req.user.id), createdRule.name, JSON.stringify(createdRule.terms), createdRule.department, createdRule.destinationPath, now()] })
+    }
+    const commandId = id()
+    const resolution = { clientId: asText(client.id), department, competence, destinationPath, createRule: Boolean(createdRule), ruleId: createdRule?.id || null }
+    await db.batch([
+      { sql: 'UPDATE organiza_pending_files SET status = ?, resolution = ?, updated_at = ? WHERE id = ?', args: ['resolution_requested', JSON.stringify(resolution), now(), asText(pending.id)] },
+      { sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [commandId, asText(req.user.id), asText(pending.device_id), 'file.resolve', JSON.stringify({ pendingFileId: asText(pending.id), fileName: asText(pending.file_name), client: { id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) }, department, competence, destinationPath })] },
+      { sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(req.user.id), asText(pending.device_id), 'file.manual_resolution_requested', 'info', `Classificação manual solicitada para ${asText(pending.file_name)}.`, JSON.stringify({ pendingFileId: asText(pending.id), commandId, createRule: Boolean(createdRule) })] },
+    ], 'write')
+    res.status(201).json({ command: { id: commandId }, rule: createdRule ? publicRule(await one('SELECT * FROM organiza_rules WHERE id = ?', [createdRule.id])) : null })
+  } catch (error) { next(error) }
+})
+
+app.patch('/api/organizza/pending-files/resolve-auto', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName.trim().slice(0, 500) : ''
+    const destinationPath = typeof req.body?.destinationPath === 'string' ? req.body.destinationPath.trim().slice(0, 1000) : ''
+    if (!fileName || !destinationPath) return res.status(400).json({ error: 'Informe o arquivo e o destino processado.' })
+    const pending = await one("SELECT * FROM organiza_pending_files WHERE user_id = ? AND device_id = ? AND file_name = ? AND status IN ('pending', 'resolution_requested') ORDER BY created_at DESC LIMIT 1", [asText(req.user.id), asText(req.device.id), fileName])
+    if (!pending) return res.json({ ok: true, pendingFile: null })
+    await db.execute({ sql: "UPDATE organiza_pending_files SET status = 'resolved', destination_path = ?, resolved_at = ?, updated_at = ? WHERE id = ?", args: [destinationPath, now(), now(), asText(pending.id)] })
+    res.json({ ok: true, pendingFile: publicPendingFile(await one('SELECT * FROM organiza_pending_files WHERE id = ?', [asText(pending.id)])) })
+  } catch (error) { next(error) }
+})
+
 app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
   try {
     const userId = asText(req.user.id)
@@ -384,6 +472,7 @@ app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
       { sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id IN (SELECT id FROM organiza_folder_structures WHERE user_id = ?)', args: [userId] },
       { sql: 'DELETE FROM organiza_folder_structures WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_file_index WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_pending_files WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_commands WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_events WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_rules WHERE user_id = ?', args: [userId] },
@@ -496,6 +585,18 @@ app.patch('/api/organizza/commands/:id', requireDeviceAuth, async (req, res, nex
     await db.execute({ sql: 'UPDATE organiza_commands SET status = ?, result_message = ?, completed_at = ? WHERE id = ?', args: [status, message, now(), asText(command.id)] })
     await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(req.user.id), asText(req.device.id), 'structure.completed', status === 'completed' ? 'success' : 'error', message, JSON.stringify({ commandId: asText(command.id), commandType: asText(command.command_type) })] })
     res.json({ ok: true })
+  } catch (error) { next(error) }
+})
+
+app.patch('/api/organizza/pending-files/:id', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const status = req.body?.status
+    const destinationPath = typeof req.body?.destinationPath === 'string' ? req.body.destinationPath.slice(0, 1000) : ''
+    if (!['resolved', 'pending'].includes(status)) return res.status(400).json({ error: 'Status de arquivo pendente inválido.' })
+    const pending = await one('SELECT * FROM organiza_pending_files WHERE id = ? AND user_id = ? AND device_id = ?', [req.params.id, asText(req.user.id), asText(req.device.id)])
+    if (!pending) return res.status(404).json({ error: 'Arquivo pendente não encontrado neste computador.' })
+    await db.execute({ sql: 'UPDATE organiza_pending_files SET status = ?, destination_path = ?, resolved_at = ?, updated_at = ? WHERE id = ?', args: [status, destinationPath, status === 'resolved' ? now() : null, now(), asText(pending.id)] })
+    res.json({ pendingFile: publicPendingFile(await one('SELECT * FROM organiza_pending_files WHERE id = ?', [asText(pending.id)])) })
   } catch (error) { next(error) }
 })
 

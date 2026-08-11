@@ -1,6 +1,6 @@
 # Documentação da plataforma Solutte
 
-Atualizada em 10 de agosto de 2026.
+Atualizada em 11 de agosto de 2026.
 
 ## 1. Visão geral
 
@@ -16,7 +16,7 @@ Endereços publicados:
 
 - Site/API: `https://solutte-automations.vercel.app`
 - Painel Organizza: `https://solutte-organizza.vercel.app`
-- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.4.exe`
+- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.6.exe`
 
 ## 2. Estado atual e limites importantes
 
@@ -102,7 +102,7 @@ O painel oferece:
 - Barra de progresso durante a importação.
 - Tela de computadores conectados.
 - Tela de estruturas de pasta.
-- Tela de regras de leitura e fila de não processados.
+- Tela de regras de leitura e fila de classificação manual para arquivos não processados.
 - Tela de atividade/auditoria.
 - Ação **Limpar dados**, que apaga apenas os dados do Organizza da conta no banco: clientes, dispositivos, regras, estruturas, comandos, índice e eventos. Ela não apaga pastas ou arquivos do computador.
 
@@ -189,6 +189,9 @@ Um arquivo é enviado a `Organizza/nprocessados` quando não há regra compatív
 - O desktop mantém `nprocessados` fora do monitoramento de entrada para não entrar em loop.
 - Ele revisa automaticamente os pendentes a cada 30 segundos após uma regra/estrutura compatível estar disponível.
 - Não é necessário mover manualmente o arquivo de volta para `Organizza` enquanto o desktop está ativo.
+- Cada arquivo pendente também é registrado em uma fila no painel, com o motivo, CNPJ e competência que puderem ser reconhecidos.
+- Pelo painel, o usuário pode escolher cliente, departamento, competência e destino para resolver somente aquele arquivo. Opcionalmente, pode salvar os termos como uma nova regra para os próximos documentos.
+- Ao receber uma resolução manual, o desktop move o arquivo de `nprocessados` para o destino escolhido e marca a fila como concluída. Se uma regra posterior resolver o arquivo automaticamente, a fila também é concluída.
 - Quando um arquivo é processado, é criada uma cópia no `BackupOrganiza` antes da movimentação. O arquivo original segue para o destino final.
 
 ## 7. Izza
