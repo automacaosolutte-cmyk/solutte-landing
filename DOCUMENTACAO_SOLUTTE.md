@@ -16,7 +16,7 @@ Endereços publicados:
 
 - Site/API: `https://solutte-automations.vercel.app`
 - Painel Organizza: `https://solutte-automations.vercel.app/organizza/`
-- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.6.exe`
+- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.8.exe`
 
 ## 2. Estado atual e limites importantes
 
@@ -117,7 +117,7 @@ código, razão social, CNPJ
 Durante a importação:
 
 - São aceitos até 2.000 clientes por envio.
-- Código e razão social são obrigatórios.
+- Razão social é obrigatória. Pela importação, o código também é obrigatório; no cadastro individual, o código é opcional e o CNPJ identifica o cliente.
 - CNPJ é armazenado apenas com dígitos.
 - A razão social é normalizada para remover acentos, cedilha, til e caracteres especiais problemáticos para nomes de pasta.
 - O código deve ser único por conta; enviar o mesmo código atualiza os dados daquele cliente.
@@ -157,10 +157,10 @@ O desktop observa `Área de Trabalho/Organizza` continuamente. Quando detecta um
 1. Ignora qualquer item dentro de `nprocessados`, evitando ciclo de leitura.
 2. Aguarda o arquivo estabilizar antes de processar.
 3. Lê apenas o nome do arquivo; não abre conteúdo do documento.
-4. Busca o cliente pelo CNPJ presente no nome ou pelo código cadastrado.
+4. Busca o cliente pelo CNPJ presente no nome, pelo código cadastrado (inclusive códigos curtos como `30`) ou pela razão social.
 5. Busca competência no padrão `MMYYYY`, por exemplo `072026`.
 6. Compara os termos obrigatórios cadastrados em uma regra.
-7. Quando todos os dados necessários são encontrados, copia o arquivo para o backup e move o original para o destino calculado.
+7. Quando todos os dados necessários são encontrados, copia o arquivo para o backup e move o original para o destino calculado. Caso o nome não seja suficiente e seja um PDF com texto, a leitura é feita somente no computador para procurar CNPJ, código, competência e tipo; o conteúdo não é enviado à web.
 8. Registra evento local e envia evento resumido ao painel.
 
 Exemplo de um nome esperado:
@@ -192,7 +192,7 @@ Um arquivo é enviado a `Organizza/nprocessados` quando não há regra compatív
 - Cada arquivo pendente também é registrado em uma fila no painel, com o motivo, CNPJ e competência que puderem ser reconhecidos.
 - Pelo painel, o usuário pode escolher cliente, departamento, competência e destino para resolver somente aquele arquivo. Opcionalmente, pode salvar os termos como uma nova regra para os próximos documentos.
 - Ao receber uma resolução manual, o desktop move o arquivo de `nprocessados` para o destino escolhido e marca a fila como concluída. Se uma regra posterior resolver o arquivo automaticamente, a fila também é concluída.
-- Quando um arquivo é processado, é criada uma cópia no `BackupOrganiza` antes da movimentação. O arquivo original segue para o destino final.
+- Quando um arquivo é processado, é criada uma cópia em `BackupOrganiza/DD-MM-AAAA/Dpto .../arquivo` antes da movimentação. O arquivo original segue para o destino final. Arquivos ainda sem departamento ficam em `A classificar`, nunca em uma pasta `sem-clientes`.
 
 ## 7. Izza
 

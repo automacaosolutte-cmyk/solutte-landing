@@ -195,6 +195,14 @@ function publicDevice(row) {
   }
 }
 
+function publicClient(row) {
+  const storedCode = asText(row.code)
+  return {
+    id: asText(row.id), code: storedCode.startsWith('SEM-CODIGO-') ? '' : storedCode,
+    legalName: asText(row.legalName || row.legal_name), cnpj: asText(row.cnpj), createdAt: asText(row.createdAt || row.created_at),
+  }
+}
+
 function publicStructure(row) {
   return {
     id: asText(row.id), name: asText(row.name), mode: asText(row.mode), rootPath: asText(row.root_path),
@@ -290,7 +298,28 @@ app.get('/api/organizza/devices', requireAuth, async (req, res, next) => {
 app.get('/api/organizza/clients', requireAuth, async (req, res, next) => {
   try {
     const clients = await many('SELECT id, code, legal_name AS legalName, cnpj, created_at AS createdAt FROM organiza_clients WHERE user_id = ? ORDER BY code ASC', [asText(req.user.id)])
-    res.json({ clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj), createdAt: asText(client.createdAt) })) })
+    res.json({ clients: clients.map(publicClient) })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/clients', requireAuth, async (req, res, next) => {
+  try {
+    const requestedCode = typeof req.body?.code === 'string' ? req.body.code.trim().slice(0, 60) : ''
+    const legalName = typeof req.body?.legalName === 'string' ? normalizeClientName(req.body.legalName).slice(0, 300) : ''
+    const cnpj = typeof req.body?.cnpj === 'string' ? req.body.cnpj.replace(/\D/g, '').slice(0, 14) : ''
+    if (!legalName || cnpj.length !== 14) return res.status(400).json({ error: 'Informe a razão social e um CNPJ com 14 dígitos.' })
+    const userId = asText(req.user.id)
+    const duplicatedCnpj = await one('SELECT id FROM organiza_clients WHERE user_id = ? AND cnpj = ? LIMIT 1', [userId, cnpj])
+    if (duplicatedCnpj) return res.status(409).json({ error: 'Já existe um cliente cadastrado com este CNPJ.' })
+    const clientId = id()
+    const code = requestedCode || `SEM-CODIGO-${clientId.slice(0, 8).toUpperCase()}`
+    const duplicateCode = await one('SELECT id FROM organiza_clients WHERE user_id = ? AND code = ? LIMIT 1', [userId, code])
+    if (duplicateCode) return res.status(409).json({ error: 'Já existe um cliente cadastrado com este código.' })
+    await db.execute({ sql: 'INSERT INTO organiza_clients (id, user_id, code, legal_name, cnpj, updated_at) VALUES (?, ?, ?, ?, ?, ?)', args: [clientId, userId, code, legalName, cnpj, now()] })
+    const devices = await many("SELECT id FROM organiza_devices WHERE user_id = ? AND status = 'connected'", [userId])
+    if (devices.length) await db.batch(devices.map((device) => ({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.refresh', JSON.stringify({ clientId })] })), 'write')
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), userId, 'clients.created', 'success', `${legalName} foi cadastrado manualmente.`, JSON.stringify({ clientId, code: requestedCode || null, cnpj })] })
+    res.status(201).json({ client: publicClient(await one('SELECT id, code, legal_name AS legalName, cnpj, created_at AS createdAt FROM organiza_clients WHERE id = ?', [clientId])), refreshRequested: devices.length > 0 })
   } catch (error) { next(error) }
 })
 
