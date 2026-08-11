@@ -15,7 +15,7 @@ A Solutte é composta por três aplicações que trabalham juntas:
 Endereços publicados:
 
 - Site/API: `https://solutte-automations.vercel.app`
-- Painel Organizza: `https://solutte-organizza.vercel.app`
+- Painel Organizza: `https://solutte-automations.vercel.app/organizza/`
 - Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.6.exe`
 
 ## 2. Estado atual e limites importantes
