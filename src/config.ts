@@ -8,4 +8,4 @@ export const SYSTEM_ACCESS_URL: string | null = null
 export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
 /** URL do sistema Solutte Organizza. Pode ser sobrescrita por variável de ambiente. */
-export const ORGANIZZA_URL = (import.meta.env.VITE_ORGANIZZA_URL || 'https://solutte-organizza.vercel.app').replace(/\/$/, '')
+export const ORGANIZZA_URL = (import.meta.env.VITE_ORGANIZZA_URL || 'https://solutte-automations.vercel.app/organizza').replace(/\/$/, '')
