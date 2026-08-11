@@ -57,6 +57,12 @@ function initializeSchema() {
         competence_year INTEGER, competence_month INTEGER, indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (device_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
       )`,
+      `CREATE TABLE IF NOT EXISTS organiza_audit_logs (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
+        message TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', ip_address TEXT NOT NULL DEFAULT '',
+        user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )`,
       `CREATE TABLE IF NOT EXISTS organiza_events (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT, event_type TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('info', 'success', 'warning', 'error')) DEFAULT 'info',
@@ -98,6 +104,7 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_devices_user ON organiza_devices(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_clients_user ON organiza_clients(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_user ON organiza_file_index(user_id)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_audit_user_created ON organiza_audit_logs(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_rules_user ON organiza_rules(user_id, active)',
@@ -151,6 +158,11 @@ const normalizeClientName = (value) => asText(value)
   .replace(/\s+/g, ' ')
   .trim()
 const normalizeRuleTerm = (value) => normalizeClientName(value).toUpperCase()
+const normalizeSearchText = (value) => normalizeClientName(value).toUpperCase()
+const safeRelativePath = (value, maxLength = 1000) => {
+  const normalized = typeof value === 'string' ? value.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, maxLength) : ''
+  return normalized && !normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..') ? normalized : ''
+}
 
 function publicRule(row) {
   let terms = []
@@ -168,6 +180,14 @@ function publicUser(row) {
 
 async function logEvent({ userId = null, agentId = null, eventType, status = 'info', message, metadata = {} }) {
   await db.execute({ sql: 'INSERT INTO execution_logs (id, user_id, agent_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, agentId, eventType, status, message, JSON.stringify(metadata)] })
+}
+
+async function auditOrganizza(req, { action, status, message, metadata = {} }) {
+  const forwardedFor = asText(req.get('x-forwarded-for')).split(',')[0].trim()
+  await db.execute({
+    sql: 'INSERT INTO organiza_audit_logs (id, user_id, action, status, message, metadata, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    args: [id(), asText(req.user.id), action, status, message, JSON.stringify(metadata), forwardedFor.slice(0, 100), asText(req.get('user-agent')).slice(0, 500)],
+  })
 }
 
 async function requireAuth(req, res, next) {
@@ -494,9 +514,113 @@ app.patch('/api/organizza/pending-files/resolve-auto', requireDeviceAuth, async 
   } catch (error) { next(error) }
 })
 
+app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const source = Array.isArray(req.body?.files) ? req.body.files.slice(0, 500) : []
+    if (!source.length) return res.status(400).json({ error: 'Informe ao menos um arquivo para indexar.' })
+    const userId = asText(req.user.id)
+    const knownClientIds = new Set((await many('SELECT id FROM organiza_clients WHERE user_id = ?', [userId])).map((client) => asText(client.id)))
+    const files = source.map((raw) => {
+      const fileName = typeof raw?.fileName === 'string' ? raw.fileName.trim().replace(/[\\/]/g, '').slice(0, 500) : ''
+      const relativePath = safeRelativePath(raw?.relativePath)
+      const clientId = typeof raw?.clientId === 'string' && knownClientIds.has(raw.clientId) ? raw.clientId : null
+      const department = ['contabil', 'fiscal', 'pessoal', 'juridico'].includes(raw?.department) ? raw.department : null
+      const competence = typeof raw?.competence === 'string' ? raw.competence.replace(/\D/g, '') : ''
+      const competenceMonth = /^(0[1-9]|1[0-2])20\d{2}$/.test(competence) ? Number(competence.slice(0, 2)) : null
+      const competenceYear = competenceMonth ? Number(competence.slice(2)) : null
+      const documentType = typeof raw?.documentType === 'string' ? raw.documentType.trim().slice(0, 120) : ''
+      if (!fileName || !relativePath) throw new Error('Um item do índice não possui nome ou caminho relativo válido.')
+      return { fileName, relativePath, clientId, department, competenceMonth, competenceYear, documentType }
+    })
+    await db.batch(files.map((file) => ({
+      sql: `INSERT INTO organiza_file_index (id, user_id, device_id, client_id, file_name, relative_path, document_type, department, competence_year, competence_month, indexed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(device_id, relative_path) DO UPDATE SET client_id = excluded.client_id, file_name = excluded.file_name, document_type = excluded.document_type, department = excluded.department, competence_year = excluded.competence_year, competence_month = excluded.competence_month, indexed_at = excluded.indexed_at`,
+      args: [id(), userId, asText(req.device.id), file.clientId, file.fileName, file.relativePath, file.documentType, file.department, file.competenceYear, file.competenceMonth, now()],
+    })), 'write')
+    res.status(201).json({ indexed: files.length })
+  } catch (error) {
+    if (error instanceof Error && /índice/i.test(error.message)) return res.status(400).json({ error: error.message })
+    next(error)
+  }
+})
+
+app.post('/api/organizza/izza/search', requireAuth, async (req, res, next) => {
+  try {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 500) : ''
+    if (query.length < 2) return res.status(400).json({ error: 'Escreva ao menos dois caracteres para a Izza pesquisar.' })
+    const userId = asText(req.user.id)
+    const text = normalizeSearchText(query)
+    const digits = query.replace(/\D/g, '')
+    const competenceMatch = digits.match(/(?:^|\D)(0[1-9]|1[0-2])(20\d{2})(?:\D|$)/)
+    const competence = competenceMatch ? { month: Number(competenceMatch[1]), year: Number(competenceMatch[2]) } : null
+    const namedMonths = { JANEIRO: 1, FEVEREIRO: 2, MARCO: 3, ABRIL: 4, MAIO: 5, JUNHO: 6, JULHO: 7, AGOSTO: 8, SETEMBRO: 9, OUTUBRO: 10, NOVEMBRO: 11, DEZEMBRO: 12 }
+    const namedMonth = Object.entries(namedMonths).find(([name]) => new RegExp(`\\b${name}\\b`).test(text))?.[1] || 0
+    const requestedYear = Number(text.match(/20\d{2}/)?.[0] || 0)
+    const requestedDepartment = /\b(FISCAL|DAS|ICMS|ISS)\b/.test(text) ? 'fiscal'
+      : /\b(CONTABIL|BALANCETE|EXTRATO|FINANCEIRO)\b/.test(text) ? 'contabil'
+        : /\b(PESSOAL|FOLHA|HOLERITE|FUNCIONARIO)\b/.test(text) ? 'pessoal'
+          : /\b(JURIDIC|CONTRATO)\b/.test(text) ? 'juridico' : ''
+    const terms = text.split(/\s+/).filter((term) => term.length >= 2 && !['ME', 'DO', 'DA', 'DE', 'EM', 'PARA', 'COM', 'QUE', 'UM', 'UMA', 'O', 'A'].includes(term)).slice(0, 12)
+    const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department,
+      f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
+      c.code, c.legal_name AS legalName, c.cnpj
+      FROM organiza_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
+      WHERE f.user_id = ? ORDER BY f.indexed_at DESC LIMIT 3000`, [userId])
+    const ranked = rows.map((row) => {
+      const haystack = normalizeSearchText(`${asText(row.fileName)} ${asText(row.documentType)} ${asText(row.code)} ${asText(row.legalName)} ${asText(row.cnpj)}`)
+      let score = terms.reduce((total, term) => total + (haystack.includes(term) ? 3 : 0), 0)
+      if (digits.length >= 3 && asText(row.cnpj).includes(digits)) score += 10
+      if (digits.length >= 1 && asText(row.code) === digits) score += 8
+      if (competence && asNumber(row.competenceMonth) === competence.month && asNumber(row.competenceYear) === competence.year) score += 8
+      if (namedMonth && asNumber(row.competenceMonth) === namedMonth) score += 6
+      if (requestedYear && asNumber(row.competenceYear) === requestedYear) score += 4
+      if (requestedDepartment && asText(row.department) === requestedDepartment) score += 5
+      return { row, score }
+    }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score || asText(b.row.indexedAt).localeCompare(asText(a.row.indexedAt))).slice(0, 20)
+    const results = ranked.map(({ row }) => ({
+      id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
+      competence: row.competenceMonth && row.competenceYear ? `${String(asNumber(row.competenceMonth)).padStart(2, '0')}${asNumber(row.competenceYear)}` : '',
+      client: row.legalName ? { code: asText(row.code).startsWith('SEM-CODIGO-') ? '' : asText(row.code), legalName: asText(row.legalName), cnpj: asText(row.cnpj) } : null,
+      indexedAt: asText(row.indexedAt),
+    }))
+    const summary = results.length ? `${results.length} documento(s) localizado(s) no índice local.` : 'Nenhum documento correspondente foi localizado no índice.'
+    res.json({ query, deterministic: true, summary, results })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/izza/open', requireAuth, async (req, res, next) => {
+  try {
+    const indexId = typeof req.body?.indexId === 'string' ? req.body.indexId : ''
+    const file = await one('SELECT id, device_id AS deviceId, file_name AS fileName, relative_path AS relativePath FROM organiza_file_index WHERE id = ? AND user_id = ?', [indexId, asText(req.user.id)])
+    if (!file) return res.status(404).json({ error: 'Documento não encontrado no índice da sua conta.' })
+    const commandId = id()
+    await db.batch([
+      { sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [commandId, asText(req.user.id), asText(file.deviceId), 'file.open', JSON.stringify({ indexId: asText(file.id), relativePath: asText(file.relativePath), fileName: asText(file.fileName) })] },
+      { sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(req.user.id), asText(file.deviceId), 'izza.open_requested', 'info', `A Izza solicitou a abertura de ${asText(file.fileName)}.`, JSON.stringify({ commandId, indexId: asText(file.id) })] },
+    ], 'write')
+    await auditOrganizza(req, { action: 'izza.document.open', status: 'requested', message: `Abertura de documento solicitada pela Izza: ${asText(file.fileName)}.`, metadata: { indexId: asText(file.id), deviceId: asText(file.deviceId) } })
+    res.status(201).json({ command: { id: commandId } })
+  } catch (error) { next(error) }
+})
+
 app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
   try {
     const userId = asText(req.user.id)
+    const password = typeof req.body?.password === 'string' ? req.body.password : ''
+    if (!password || !(await bcrypt.compare(password, asText(req.user.password_hash)))) {
+      await auditOrganizza(req, { action: 'organizza.data.clear', status: 'denied', message: 'Tentativa de limpar dados negada: senha atual inválida.' })
+      return res.status(401).json({ error: 'Informe a senha atual correta para limpar os dados.' })
+    }
+    const [clients, rules, files, pending, devices] = await Promise.all([
+      one('SELECT COUNT(*) AS total FROM organiza_clients WHERE user_id = ?', [userId]),
+      one('SELECT COUNT(*) AS total FROM organiza_rules WHERE user_id = ?', [userId]),
+      one('SELECT COUNT(*) AS total FROM organiza_file_index WHERE user_id = ?', [userId]),
+      one('SELECT COUNT(*) AS total FROM organiza_pending_files WHERE user_id = ?', [userId]),
+      one('SELECT COUNT(*) AS total FROM organiza_devices WHERE user_id = ?', [userId]),
+    ])
+    const summary = { clients: asNumber(clients.total), rules: asNumber(rules.total), files: asNumber(files.total), pendingFiles: asNumber(pending.total), devices: asNumber(devices.total) }
+    await auditOrganizza(req, { action: 'organizza.data.clear', status: 'approved', message: 'Limpeza de dados do Organizza confirmada pelo usuário.', metadata: summary })
     await db.batch([
       { sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id IN (SELECT id FROM organiza_folder_structures WHERE user_id = ?)', args: [userId] },
       { sql: 'DELETE FROM organiza_folder_structures WHERE user_id = ?', args: [userId] },
@@ -508,7 +632,7 @@ app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
       { sql: 'DELETE FROM organiza_devices WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_clients WHERE user_id = ?', args: [userId] },
     ], 'write')
-    res.json({ ok: true })
+    res.json({ ok: true, cleared: summary })
   } catch (error) { next(error) }
 })
 
@@ -530,6 +654,7 @@ app.post('/api/organizza/commands/create-structure', requireAuth, async (req, re
     const userId = asText(req.user.id)
     const { deviceId, clientIds } = req.body || {}
     const mode = req.body?.mode === 'custom' ? 'custom' : 'standard'
+    const onlyMissingClients = Boolean(req.body?.onlyMissingClients)
     const rawPaths = Array.isArray(req.body?.paths) ? req.body.paths : []
     const paths = [...new Set(rawPaths.filter((value) => typeof value === 'string').map((value) => value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')).filter((value) => value && !value.split('/').includes('..')).slice(0, 80))]
     if (mode === 'custom' && !paths.length) return res.status(400).json({ error: 'Informe ao menos uma pasta ou subpasta para o modelo personalizado.' })
@@ -541,8 +666,8 @@ app.post('/api/organizza/commands/create-structure', requireAuth, async (req, re
     if (!clients.length) return res.status(400).json({ error: 'Importe ao menos um cliente antes de criar a estrutura.' })
     if (selectedIds.length && clients.length !== selectedIds.length) return res.status(400).json({ error: 'Um ou mais clientes selecionados não pertencem à sua conta.' })
     const command = { id: id(), year: new Date().getFullYear(), clients: clients.map((client) => ({ id: asText(client.id), code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) })) }
-    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [command.id, userId, asText(device.id), 'structure.create', JSON.stringify({ year: command.year, clients: command.clients, mode, paths })] })
-    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.requested', 'info', `Criação de estrutura ${mode === 'custom' ? 'personalizada' : 'padrão'} solicitada para ${clients.length} cliente(s).`, JSON.stringify({ commandId: command.id, count: clients.length, mode })] })
+    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [command.id, userId, asText(device.id), 'structure.create', JSON.stringify({ year: command.year, clients: command.clients, mode, paths, onlyMissingClients })] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.requested', 'info', `Criação de estrutura ${onlyMissingClients ? 'somente para clientes novos' : mode === 'custom' ? 'personalizada' : 'padrão'} solicitada para ${clients.length} cliente(s).`, JSON.stringify({ commandId: command.id, count: clients.length, mode, onlyMissingClients })] })
     res.status(201).json({ command: { id: command.id, clients: clients.length, year: command.year } })
   } catch (error) { next(error) }
 })

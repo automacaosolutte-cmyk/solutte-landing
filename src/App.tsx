@@ -54,6 +54,16 @@ function AccessButton({ compact = false }: { compact?: boolean }) {
   return <a className={className} href="#acesso">Acessar sistema <span aria-hidden="true">↗</span></a>
 }
 
+function ThemeToggle() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('solutte-theme') === 'light' ? 'light' : 'dark'))
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('solutte-theme', theme)
+  }, [theme])
+  const nextTheme = theme === 'dark' ? 'light' : 'dark'
+  return <button className="theme-toggle" type="button" onClick={() => setTheme(nextTheme)} aria-label={`Ativar tema ${nextTheme === 'light' ? 'claro' : 'escuro'}`} title={`Ativar tema ${nextTheme === 'light' ? 'claro' : 'escuro'}`}><span aria-hidden="true">{theme === 'dark' ? '☀' : '◐'}</span>{theme === 'dark' ? 'Claro' : 'Escuro'}</button>
+}
+
 function LandingPage() {
   return (
     <main>
@@ -534,10 +544,8 @@ function App() {
     return () => window.removeEventListener('hashchange', syncRoute)
   }, [])
 
-  if (route === '#acesso') return <AuthPortal />
-  if (route === '#modulos') return <ModuleHub />
-  if (route.startsWith('#admin')) return <AdminDashboard />
-  return <LandingPage />
+  const page = route === '#acesso' ? <AuthPortal /> : route === '#modulos' ? <ModuleHub /> : route.startsWith('#admin') ? <AdminDashboard /> : <LandingPage />
+  return <>{page}<ThemeToggle /></>
 }
 
 export default App

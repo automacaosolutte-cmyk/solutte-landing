@@ -16,7 +16,7 @@ Endereços publicados:
 
 - Site/API: `https://solutte-automations.vercel.app`
 - Painel Organizza: `https://solutte-automations.vercel.app/organizza/`
-- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.6.9.exe`
+- Instalador atual: `https://solutte-automations.vercel.app/downloads/Solutte-Organizza-Setup-0.7.0.exe`
 
 ## 2. Estado atual e limites importantes
 
@@ -25,7 +25,6 @@ O sistema já é funcional para cadastro, autenticação, administração, impor
 Ainda não estão entregues:
 
 - Checkout e confirmação automática de pagamentos.
-- Busca real da Izza; a área de conversa está pronta, mas não consulta o índice ainda.
 - Leitura do conteúdo de PDFs, OCR, IA generativa ou classificação por IA. A classificação atual é propositalmente determinística e lê somente o nome do arquivo.
 - Gestão detalhada de funcionários e suas pastas dentro do módulo Solutte Contábil.
 - Módulos Solutte Contábil, Solutte MEI e Solutte Pessoal. Eles aparecem como produtos, porém ainda não possuem sistemas próprios.
@@ -40,6 +39,7 @@ A identidade visual em todo o ecossistema usa o lockup escuro da Solutte Automa�
 - Tela de acesso e tela de módulos no mesmo padrão visual.
 - Card funcional do Solutte Organizza; os demais produtos aparecem como “em breve”.
 - Painel web e desktop com a mesma marca e área reservada para a Izza.
+- Alternância prática entre tema escuro (padrão) e tema claro, com a preferência salva no navegador.
 
 ## 4. Site, contas e administração
 
@@ -89,6 +89,7 @@ Ao clicar no card disponível, o usuário é direcionado ao painel web do Organi
 3. O usuário informa as mesmas credenciais da Solutte no aplicativo desktop.
 4. A senha não é gravada pelo aplicativo. Depois do login, somente um token de dispositivo criptografado pelo mecanismo local do Windows é armazenado.
 5. O dispositivo envia heartbeat ao painel a cada 60 segundos e consulta novos comandos a cada 15 segundos.
+6. Ao fechar a janela, o aplicativo permanece na bandeja do Windows e continua monitorando a pasta `Organizza`. A opção **Sair completamente** encerra o monitoramento; a bandeja também permite escolher iniciar junto com o Windows.
 
 Se o aplicativo já estiver conectado, ele abre diretamente no painel local. A versão 0.6.4 impede duas tentativas de login concorrentes e diferencia `device.paired` de `device.reconnected` no histórico.
 
@@ -98,6 +99,9 @@ O painel oferece:
 
 - Dashboard com contagem real de clientes, computadores, arquivos indexados, eventos do dia e última atividade.
 - Download do desktop Windows.
+- Criação incremental: quando uma estrutura existente está selecionada, a base de clientes pode criar o padrão Solutte somente para clientes que ainda não possuem pasta identificada por código, CNPJ ou razão social.
+- Limpeza de dados protegida pela senha atual e registrada em uma auditoria permanente, separada dos dados que podem ser limpos.
+- Izza funcional no web e desktop: pesquisa determinística no índice de caminhos, retorna documentos compatíveis e pode solicitar sua abertura no computador responsável.
 - Importação de clientes por CSV e modelo de planilha para download.
 - Barra de progresso durante a importação.
 - Tela de computadores conectados.
