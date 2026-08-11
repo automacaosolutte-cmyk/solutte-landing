@@ -422,6 +422,7 @@ app.post('/api/organizza/devices/pair', requireAuth, async (req, res, next) => {
     const userId = asText(req.user.id)
     if (typeof name !== 'string' || !name.trim() || !['windows'].includes(platform)) return res.status(400).json({ error: 'Informe um computador Windows com nome válido.' })
     let device = typeof deviceId === 'string' && deviceId ? await one('SELECT * FROM organiza_devices WHERE id = ? AND user_id = ?', [deviceId, userId]) : null
+    const isNewDevice = !device
     if (device && asText(device.status) === 'revoked') return res.status(403).json({ error: 'Este computador foi revogado.' })
     if (device) {
       await db.execute({ sql: "UPDATE organiza_devices SET name = ?, platform = ?, app_version = ?, status = 'connected', last_seen_at = ?, updated_at = ? WHERE id = ?", args: [name.trim(), platform, String(appVersion).slice(0, 40), now(), now(), asText(device.id)] })
@@ -432,7 +433,7 @@ app.post('/api/organizza/devices/pair', requireAuth, async (req, res, next) => {
     }
     const current = await one('SELECT * FROM organiza_devices WHERE id = ?', [asText(device.id)])
     const token = jwt.sign({ scope: 'organizza:device', deviceId: asText(current.id) }, jwtSecret, { subject: userId, expiresIn: '180d' })
-    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(current.id), 'device.paired', 'success', `${asText(current.name)} foi conectado ao Organizza.`, JSON.stringify({ platform, appVersion: asText(current.app_version) })] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(current.id), isNewDevice ? 'device.paired' : 'device.reconnected', 'success', isNewDevice ? `${asText(current.name)} foi conectado ao Organizza.` : `${asText(current.name)} foi reconectado ao Organizza.`, JSON.stringify({ platform, appVersion: asText(current.app_version) })] })
     res.status(201).json({ device: publicDevice(current), token })
   } catch (error) { next(error) }
 })
