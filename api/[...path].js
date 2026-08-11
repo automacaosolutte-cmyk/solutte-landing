@@ -394,6 +394,19 @@ app.delete('/api/organizza/data', requireAuth, async (req, res, next) => {
   } catch (error) { next(error) }
 })
 
+app.post('/api/organizza/commands/select-root', requireAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : ''
+    const device = await one("SELECT * FROM organiza_devices WHERE id = ? AND user_id = ? AND status = 'connected'", [deviceId, userId])
+    if (!device) return res.status(400).json({ error: 'Selecione um computador conectado para escolher a pasta.' })
+    const commandId = id()
+    await db.execute({ sql: 'INSERT INTO organiza_commands (id, user_id, device_id, command_type, payload) VALUES (?, ?, ?, ?, ?)', args: [commandId, userId, asText(device.id), 'structure.select_root', '{}'] })
+    await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, asText(device.id), 'structure.selector_requested', 'info', 'Seleção de pasta solicitada ao desktop.', JSON.stringify({ commandId })] })
+    res.status(201).json({ command: { id: commandId } })
+  } catch (error) { next(error) }
+})
+
 app.post('/api/organizza/commands/create-structure', requireAuth, async (req, res, next) => {
   try {
     const userId = asText(req.user.id)
