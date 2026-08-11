@@ -552,39 +552,54 @@ app.post('/api/organizza/izza/search', requireAuth, async (req, res, next) => {
     const userId = asText(req.user.id)
     const text = normalizeSearchText(query)
     const digits = query.replace(/\D/g, '')
-    const competenceMatch = digits.match(/(?:^|\D)(0[1-9]|1[0-2])(20\d{2})(?:\D|$)/)
+    const competenceMatch = query.match(/(?:^|\D)(0[1-9]|1[0-2])(20\d{2})(?:\D|$)/)
     const competence = competenceMatch ? { month: Number(competenceMatch[1]), year: Number(competenceMatch[2]) } : null
     const namedMonths = { JANEIRO: 1, FEVEREIRO: 2, MARCO: 3, ABRIL: 4, MAIO: 5, JUNHO: 6, JULHO: 7, AGOSTO: 8, SETEMBRO: 9, OUTUBRO: 10, NOVEMBRO: 11, DEZEMBRO: 12 }
     const namedMonth = Object.entries(namedMonths).find(([name]) => new RegExp(`\\b${name}\\b`).test(text))?.[1] || 0
-    const requestedYear = Number(text.match(/20\d{2}/)?.[0] || 0)
-    const requestedDepartment = /\b(FISCAL|DAS|ICMS|ISS)\b/.test(text) ? 'fiscal'
-      : /\b(CONTABIL|BALANCETE|EXTRATO|FINANCEIRO)\b/.test(text) ? 'contabil'
-        : /\b(PESSOAL|FOLHA|HOLERITE|FUNCIONARIO)\b/.test(text) ? 'pessoal'
-          : /\b(JURIDIC|CONTRATO)\b/.test(text) ? 'juridico' : ''
-    const terms = text.split(/\s+/).filter((term) => term.length >= 2 && !['ME', 'DO', 'DA', 'DE', 'EM', 'PARA', 'COM', 'QUE', 'UM', 'UMA', 'O', 'A'].includes(term)).slice(0, 12)
+    const requestedYear = competence?.year || Number(text.match(/20\d{2}/)?.[0] || 0)
+    const clients = await many('SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ?', [userId])
+    const candidates = new Map()
+    const numericTokens = text.match(/\b\d{1,10}\b/g) || []
+    for (const client of clients) {
+      const code = asText(client.code)
+      const codeDigits = code.replace(/\D/g, '')
+      const cnpj = asText(client.cnpj).replace(/\D/g, '')
+      const legalName = normalizeSearchText(asText(client.legalName))
+      const nameTokens = legalName.split(/\s+/).filter((term) => term.length >= 3 && !['LTDA', 'EIRELI', 'EMPRESA', 'COMERCIO', 'SERVICOS', 'INDUSTRIA'].includes(term))
+      const codeMatch = code && numericTokens.some((token) => code === token || (codeDigits && String(Number(codeDigits)) === String(Number(token))))
+      const cnpjMatch = cnpj.length === 14 && digits.includes(cnpj)
+      const nameMatch = (legalName.length >= 4 && text.includes(legalName)) || (nameTokens.length >= 2 && nameTokens.filter((term) => text.includes(term)).length >= 2)
+      if (codeMatch || cnpjMatch || nameMatch) candidates.set(asText(client.id), client)
+    }
+    if (!candidates.size) return res.json({ query, deterministic: true, summary: 'Não identifiquei uma empresa única. Informe o código, CNPJ completo ou ao menos duas palavras do nome da empresa.', results: [] })
+    if (candidates.size > 1) return res.json({ query, deterministic: true, summary: `Encontrei ${candidates.size} empresas possíveis. Informe o código ou CNPJ completo para a Izza não abrir o documento errado.`, results: [] })
+    const [clientId, client] = [...candidates.entries()][0]
+    const clientWords = new Set([asText(client.code), asText(client.cnpj), ...normalizeSearchText(asText(client.legalName)).split(/\s+/)])
+    const ignored = new Set(['ME', 'DO', 'DA', 'DE', 'EM', 'PARA', 'COM', 'QUE', 'UM', 'UMA', 'O', 'A', ...Object.keys(namedMonths), String(requestedYear)])
+    const documentTerms = text.split(/\s+/).filter((term) => term.length >= 3 && !ignored.has(term) && !clientWords.has(term) && !/^\d+$/.test(term)).slice(0, 8)
     const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department,
       f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
       c.code, c.legal_name AS legalName, c.cnpj
       FROM organiza_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
-      WHERE f.user_id = ? ORDER BY f.indexed_at DESC LIMIT 3000`, [userId])
-    const ranked = rows.map((row) => {
-      const haystack = normalizeSearchText(`${asText(row.fileName)} ${asText(row.documentType)} ${asText(row.code)} ${asText(row.legalName)} ${asText(row.cnpj)}`)
-      let score = terms.reduce((total, term) => total + (haystack.includes(term) ? 3 : 0), 0)
-      if (digits.length >= 3 && asText(row.cnpj).includes(digits)) score += 10
-      if (digits.length >= 1 && asText(row.code) === digits) score += 8
-      if (competence && asNumber(row.competenceMonth) === competence.month && asNumber(row.competenceYear) === competence.year) score += 8
-      if (namedMonth && asNumber(row.competenceMonth) === namedMonth) score += 6
-      if (requestedYear && asNumber(row.competenceYear) === requestedYear) score += 4
-      if (requestedDepartment && asText(row.department) === requestedDepartment) score += 5
-      return { row, score }
-    }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score || asText(b.row.indexedAt).localeCompare(asText(a.row.indexedAt))).slice(0, 20)
-    const results = ranked.map(({ row }) => ({
+      WHERE f.user_id = ? AND f.client_id = ? ORDER BY f.indexed_at DESC LIMIT 1000`, [userId, clientId])
+    const exact = rows.filter((row) => {
+      const documentText = normalizeSearchText(`${asText(row.fileName)} ${asText(row.documentType)}`)
+      if (documentTerms.length && !documentTerms.every((term) => documentText.includes(term))) return false
+      if (competence && (asNumber(row.competenceMonth) !== competence.month || asNumber(row.competenceYear) !== competence.year)) return false
+      if (namedMonth && asNumber(row.competenceMonth) !== namedMonth) return false
+      if (requestedYear && asNumber(row.competenceYear) !== requestedYear) return false
+      return true
+    })
+    if (namedMonth && !requestedYear && new Set(exact.map((row) => asNumber(row.competenceYear)).filter(Boolean)).size > 1) return res.json({ query, deterministic: true, summary: `Há documentos de ${Object.keys(namedMonths).find((name) => namedMonths[name] === namedMonth)?.toLowerCase()} em mais de um ano para ${asText(client.legalName)}. Informe também o ano, por exemplo 052026.`, results: [] })
+    if (!exact.length) return res.json({ query, deterministic: true, summary: `Nenhum documento exato foi localizado para ${asText(client.legalName)}. Confira o tipo do documento e a competência.`, results: [] })
+    if (exact.length > 1) return res.json({ query, deterministic: true, summary: `Encontrei ${exact.length} documentos possíveis para ${asText(client.legalName)}. Informe mais um detalhe do nome ou a competência completa para a Izza retornar um único arquivo.`, results: [] })
+    const results = exact.map((row) => ({
       id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
       competence: row.competenceMonth && row.competenceYear ? `${String(asNumber(row.competenceMonth)).padStart(2, '0')}${asNumber(row.competenceYear)}` : '',
       client: row.legalName ? { code: asText(row.code).startsWith('SEM-CODIGO-') ? '' : asText(row.code), legalName: asText(row.legalName), cnpj: asText(row.cnpj) } : null,
       indexedAt: asText(row.indexedAt),
     }))
-    const summary = results.length ? `${results.length} documento(s) localizado(s) no índice local.` : 'Nenhum documento correspondente foi localizado no índice.'
+    const summary = `Documento exato localizado para ${asText(client.legalName)}.`
     res.json({ query, deterministic: true, summary, results })
   } catch (error) { next(error) }
 })
