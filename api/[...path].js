@@ -142,7 +142,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.status(204).end()
   next()
 })
-app.use(express.json({ limit: '100kb' }))
+app.use(express.json({ limit: '2mb' }))
 app.use(async (_req, _res, next) => { try { await initializeSchema(); next() } catch (error) { next(error) } })
 
 const id = () => crypto.randomUUID()
@@ -379,6 +379,7 @@ app.get('/api/organizza/structures', requireAuth, async (req, res, next) => {
 })
 
 app.post('/api/organizza/structures/sync', requireDeviceAuth, async (req, res, next) => {
+  const startedAt = Date.now()
   try {
     const mode = req.body?.mode
     const rootPath = typeof req.body?.rootPath === 'string' ? req.body.rootPath.trim().slice(0, 1000) : ''
@@ -386,7 +387,7 @@ app.post('/api/organizza/structures/sync', requireDeviceAuth, async (req, res, n
     const rawNodes = Array.isArray(req.body?.nodes) ? req.body.nodes.slice(0, 5000) : []
     if (!['existing', 'standard', 'custom'].includes(mode) || !rootPath) return res.status(400).json({ error: 'Informe o modo e a pasta raiz da estrutura.' })
     const clientIds = new Set((await many('SELECT id FROM organiza_clients WHERE user_id = ?', [asText(req.user.id)])).map((client) => asText(client.id)))
-    const nodes = rawNodes.map((raw) => {
+    const receivedNodes = rawNodes.map((raw) => {
       const relativePath = typeof raw?.relativePath === 'string' ? raw.relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 1000) : ''
       const parentPath = typeof raw?.parentPath === 'string' ? raw.parentPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').slice(0, 1000) : ''
       const folderName = typeof raw?.folderName === 'string' ? raw.folderName.trim().slice(0, 240) : ''
@@ -395,6 +396,7 @@ app.post('/api/organizza/structures/sync', requireDeviceAuth, async (req, res, n
       if (!relativePath || !folderName || !Number.isInteger(depth) || depth < 1 || relativePath.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('A árvore de pastas recebida é inválida.')
       return { relativePath, parentPath, folderName, depth, clientId }
     })
+    const nodes = [...new Map(receivedNodes.map((node) => [node.relativePath, node])).values()]
     const userId = asText(req.user.id); const deviceId = asText(req.device.id)
     let structure = await one('SELECT * FROM organiza_folder_structures WHERE user_id = ? AND device_id = ? AND root_path = ? ORDER BY updated_at DESC LIMIT 1', [userId, deviceId, rootPath])
     if (!structure) {
@@ -406,11 +408,17 @@ app.post('/api/organizza/structures/sync', requireDeviceAuth, async (req, res, n
       await db.execute({ sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id = ?', args: [asText(structure.id)] })
       structure = await one('SELECT * FROM organiza_folder_structures WHERE id = ?', [asText(structure.id)])
     }
-    if (nodes.length) await db.batch(nodes.map((node) => ({ sql: 'INSERT INTO organiza_folder_nodes (id, structure_id, client_id, relative_path, parent_path, folder_name, depth) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(structure.id), node.clientId, node.relativePath, node.parentPath, node.folderName, node.depth] })), 'write')
+    for (let start = 0; start < nodes.length; start += 250) {
+      await db.batch(nodes.slice(start, start + 250).map((node) => ({ sql: 'INSERT INTO organiza_folder_nodes (id, structure_id, client_id, relative_path, parent_path, folder_name, depth) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(structure.id), node.clientId, node.relativePath, node.parentPath, node.folderName, node.depth] })), 'write')
+    }
     await db.execute({ sql: "UPDATE organiza_devices SET structure_mode = ?, clients_root_path = ?, updated_at = ? WHERE id = ?", args: [mode, rootPath, now(), deviceId] })
     await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), userId, deviceId, 'structure.scanned', 'success', `${nodes.length} pasta(s) da estrutura foram registradas sem leitura de arquivos.`, JSON.stringify({ structureId: asText(structure.id), mode, folderCount: nodes.length })] })
+    console.log(JSON.stringify({ level: 'info', event: 'organizza.structure.sync', mode, folders: nodes.length, durationMs: Date.now() - startedAt, requestId: asText(req.get('x-vercel-id')) }))
     res.status(201).json({ structure: publicStructure(structure) })
-  } catch (error) { next(error) }
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', event: 'organizza.structure.sync_failed', durationMs: Date.now() - startedAt, requestId: asText(req.get('x-vercel-id')), error: error instanceof Error ? error.message : String(error) }))
+    next(error)
+  }
 })
 
 app.get('/api/organizza/rules', requireAuth, async (req, res, next) => {
@@ -890,6 +898,12 @@ app.get('/api/admin/logs', requireAuth, requireAdmin, async (req, res, next) => 
 
 app.get('/api/admin/logs/download', requireAuth, requireAdmin, async (_req, res, next) => { try { const logs = await many('SELECT * FROM execution_logs ORDER BY created_at DESC'); res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.setHeader('Content-Disposition', `attachment; filename="solutte-logs-${new Date().toISOString().slice(0, 10)}.json"`); res.send(JSON.stringify(logs, null, 2)) } catch (error) { next(error) } })
 
-app.use((error, _req, res, _next) => { console.error(error); res.status(500).json({ error: 'Erro interno da aplicação.' }) })
+app.use((error, req, res, _next) => {
+  const status = Number(error?.status || error?.statusCode || 0) || (error?.type === 'entity.too.large' ? 413 : 500)
+  const message = error instanceof Error ? error.message : String(error || 'Erro interno da aplicação.')
+  console.error(JSON.stringify({ level: 'error', event: 'api.request_failed', method: req.method, route: req.originalUrl, requestId: asText(req.get('x-vercel-id')), status, error: message }))
+  if (status === 413) return res.status(413).json({ error: 'A estrutura possui pastas demais para um único envio. Atualize o Desktop e tente novamente; ele sincroniza a árvore em lotes seguros.', code: 'STRUCTURE_PAYLOAD_TOO_LARGE' })
+  res.status(status >= 400 && status < 500 ? status : 500).json({ error: status >= 500 ? 'Erro interno da aplicação. O registro técnico foi salvo para diagnóstico.' : message, code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR' })
+})
 
 export default app
