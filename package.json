@@ -11,17 +11,18 @@
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
+    "@vercel/blob": "^2.8.0",
     "@vitejs/plugin-react": "latest",
     "bcryptjs": "^2.4.3",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "vite": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
-    "typescript": "latest",
     "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "@types/react-dom": "latest",
+    "typescript": "latest"
   }
 }
