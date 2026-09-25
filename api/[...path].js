@@ -127,6 +127,7 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_devices_user ON organiza_devices(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_clients_user ON organiza_clients(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_user ON organiza_file_index(user_id)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_files_map_lookup ON organiza_file_index(user_id, client_id, competence_year, competence_month)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_audit_user_created ON organiza_audit_logs(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
@@ -1195,7 +1196,13 @@ async function searchWithIzza(req, res, next) {
       { name: 'Balancete', terms: ['BALANCETE'], department: 'contabil' }, { name: 'Relatório financeiro', terms: ['RELATORIO', 'FINANCEIRO'], department: 'contabil' }, { name: 'Extrato bancário', terms: ['EXTRATO'], department: 'contabil' },
       { name: 'Folha de pagamento', terms: ['FOLHA'], department: 'pessoal' }, { name: 'Holerite', terms: ['HOLERITE'], department: 'pessoal' }, { name: 'Contrato', terms: ['CONTRATO'], department: 'juridico' }, { name: 'Certificado digital', terms: ['CERTIFICADO', 'DIGITAL'], department: 'juridico' },
     ]
-    const configuredRules = (await many('SELECT name, terms, department FROM organiza_rules WHERE user_id = ? AND active = 1 ORDER BY created_at ASC', [userId])).map((rule) => {
+    const explicitFinancialHint = /(?:^|\W)DARF\W+INSS(?:$|\W)|(?:^|\W)INSS\W+DARF(?:$|\W)/.test(originalText) ? 'inss'
+      : /(?:^|\W)RECIBO\W+DE\W+PAGAMENTO(?:$|\W)/.test(originalText) ? 'payroll_receipt'
+        : /(?:^|\W)FGTS(?:$|\W)/.test(originalText) ? 'fgts'
+          : /(?:^|\W)DAS(?:$|\W)/.test(originalText) && !/(?:^|\W)DASMEI(?:$|\W)/.test(originalText) ? 'das'
+            : ''
+    const configuredRuleRows = explicitFinancialHint ? [] : await many('SELECT name, terms, department FROM organiza_rules WHERE user_id = ? AND active = 1 ORDER BY created_at ASC', [userId])
+    const configuredRules = configuredRuleRows.map((rule) => {
       let terms = []
       try { terms = JSON.parse(asText(rule.terms) || '[]') } catch { terms = [] }
       return { name: asText(rule.name), terms: Array.isArray(terms) ? terms.map(normalizeSearchText).filter(Boolean) : [], department: asText(rule.department) }
@@ -1215,7 +1222,7 @@ async function searchWithIzza(req, res, next) {
         || (containsTerm(value, 'RECIBO') && containsTerm(value, 'PAGAMENTO'))
       ))
     const matchesOriginalIdentity = (value) => originalIdentityTerms.every((term) => containsRequestedTerm(value, term))
-    const [personalLearnings, globalLearnings] = await Promise.all([
+    const [personalLearnings, globalLearnings] = explicitFinancialHint ? [[], []] : await Promise.all([
       many('SELECT phrase, document_type AS documentType, department, confirmations FROM organiza_izza_learnings WHERE user_id = ? ORDER BY confirmations DESC, updated_at DESC', [userId]),
       many(`SELECT phrase, document_type AS documentType, department, COUNT(DISTINCT user_id) AS confirmations
         FROM organiza_izza_learnings GROUP BY phrase, document_type, department HAVING COUNT(DISTINCT user_id) >= 3 ORDER BY confirmations DESC`),
@@ -1230,15 +1237,10 @@ async function searchWithIzza(req, res, next) {
     const learnedRule = learned ? { name: asText(learned.documentType), terms: normalizeSearchText(learned.documentType).split(/\s+/).filter((term) => term.length >= 2), department: asText(learned.department) } : null
     // O tipo escrito pelo usuário sempre vence a interpretação da IA. Isso
     // impede que “DAS da empresa 100” vire uma listagem genérica do mês.
-    const explicitFinancialRequest = containsTerm(originalText, 'DARF') && containsTerm(originalText, 'INSS')
-      ? { kind: 'inss', rule: defaultDocumentRules.find((rule) => rule.name === 'DARF INSS') }
-      : containsTerm(originalText, 'RECIBO') && containsTerm(originalText, 'PAGAMENTO')
-        ? { kind: 'payroll_receipt', rule: defaultDocumentRules.find((rule) => rule.name === 'Recibo de Pagamento') }
-        : containsTerm(originalText, 'FGTS')
-          ? { kind: 'fgts', rule: defaultDocumentRules.find((rule) => rule.name === 'FGTS') }
-          : containsTerm(originalText, 'DAS') && !containsTerm(originalText, 'DASMEI')
-            ? { kind: 'das', rule: defaultDocumentRules.find((rule) => rule.name === 'DAS') }
-            : null
+    const financialRuleNames = { inss: 'DARF INSS', payroll_receipt: 'Recibo de Pagamento', fgts: 'FGTS', das: 'DAS' }
+    const explicitFinancialRequest = explicitFinancialHint
+      ? { kind: explicitFinancialHint, rule: defaultDocumentRules.find((rule) => rule.name === financialRuleNames[explicitFinancialHint]) }
+      : null
     const explicitRule = explicitFinancialRequest?.rule || knownRules.find((rule) => rule.terms.every((term) => containsTerm(originalText, term))) || null
     const recognizedRule = explicitRule || learnedRule || knownRules.find((rule) => rule.terms.every((term) => containsTerm(text, term))) || null
     const interpretedDescription = normalizeSearchText(aiFilters?.documentDescription)
