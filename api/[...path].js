@@ -1200,7 +1200,9 @@ async function searchWithIzza(req, res, next) {
       try { terms = JSON.parse(asText(rule.terms) || '[]') } catch { terms = [] }
       return { name: asText(rule.name), terms: Array.isArray(terms) ? terms.map(normalizeSearchText).filter(Boolean) : [], department: asText(rule.department) }
     }).filter((rule) => rule.terms.length && ['contabil', 'fiscal', 'pessoal', 'juridico'].includes(rule.department))
-    const knownRules = [...configuredRules, ...defaultDocumentRules]
+    // Tipos financeiros são reservados: regras personalizadas e aprendizados
+    // nunca podem transformar um pedido de DAS/FGTS/INSS/recibo em listagem ampla.
+    const knownRules = [...defaultDocumentRules, ...configuredRules]
     const containsTerm = (value, term) => {
       const phrase = normalizeSearchText(term).trim().split(/\s+/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^A-Z0-9]+')
       return Boolean(phrase && new RegExp(`(?:^|[^A-Z0-9])${phrase}(?:$|[^A-Z0-9])`).test(value))
@@ -1228,7 +1230,16 @@ async function searchWithIzza(req, res, next) {
     const learnedRule = learned ? { name: asText(learned.documentType), terms: normalizeSearchText(learned.documentType).split(/\s+/).filter((term) => term.length >= 2), department: asText(learned.department) } : null
     // O tipo escrito pelo usuário sempre vence a interpretação da IA. Isso
     // impede que “DAS da empresa 100” vire uma listagem genérica do mês.
-    const explicitRule = knownRules.find((rule) => rule.terms.every((term) => containsTerm(originalText, term))) || null
+    const explicitFinancialRequest = containsTerm(originalText, 'DARF') && containsTerm(originalText, 'INSS')
+      ? { kind: 'inss', rule: defaultDocumentRules.find((rule) => rule.name === 'DARF INSS') }
+      : containsTerm(originalText, 'RECIBO') && containsTerm(originalText, 'PAGAMENTO')
+        ? { kind: 'payroll_receipt', rule: defaultDocumentRules.find((rule) => rule.name === 'Recibo de Pagamento') }
+        : containsTerm(originalText, 'FGTS')
+          ? { kind: 'fgts', rule: defaultDocumentRules.find((rule) => rule.name === 'FGTS') }
+          : containsTerm(originalText, 'DAS') && !containsTerm(originalText, 'DASMEI')
+            ? { kind: 'das', rule: defaultDocumentRules.find((rule) => rule.name === 'DAS') }
+            : null
+    const explicitRule = explicitFinancialRequest?.rule || knownRules.find((rule) => rule.terms.every((term) => containsTerm(originalText, term))) || null
     const recognizedRule = explicitRule || learnedRule || knownRules.find((rule) => rule.terms.every((term) => containsTerm(text, term))) || null
     const interpretedDescription = normalizeSearchText(aiFilters?.documentDescription)
     const genericDescriptions = new Set(['', 'DOCUMENTO', 'DOCUMENTOS', 'ARQUIVO', 'ARQUIVOS', 'DOCUMENTOS FISCAIS', 'ARQUIVOS FISCAIS'])
@@ -1239,7 +1250,7 @@ async function searchWithIzza(req, res, next) {
       ? originalDocumentTerms
       : documentRuleForSearch ? documentRuleForSearch.terms : documentTerms
     const financialKindByRule = { DAS: 'das', FGTS: 'fgts', INSS: 'inss', 'DARF INSS': 'inss', 'RECIBO DE PAGAMENTO': 'payroll_receipt' }
-    const requestedFinancialKind = financialKindByRule[normalizeSearchText(documentRuleForSearch?.name)] || ''
+    const requestedFinancialKind = explicitFinancialRequest?.kind || financialKindByRule[normalizeSearchText(documentRuleForSearch?.name)] || ''
     const matchesRequestedDocument = (row, documentText) => {
       if (!requestedFinancialKind) return !requestedDocumentTerms.length || requestedDocumentTerms.every((term) => containsRequestedTerm(documentText, term))
       const extracted = parsedExtractedData(row.extractedData)
