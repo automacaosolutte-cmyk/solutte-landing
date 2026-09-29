@@ -4,6 +4,7 @@ import { createClient } from '@libsql/client'
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import { get, put } from '@vercel/blob'
+import { normalizeFileIndexDepartment } from '../lib/file-index.js'
 import { createIzzaWorkSessionMiddleware, issueIzzaWorkSession } from '../lib/izza-work-session.js'
 
 const databaseUrl = process.env.TURSO_DATABASE_URL
@@ -244,7 +245,7 @@ async function writeSharedFileMap(userId, files, { forceChanged = false } = {}) 
           ON CONFLICT(user_id, relative_path) DO UPDATE SET file_name = excluded.file_name, client_id = excluded.client_id,
             file_hash = excluded.file_hash, document_type = excluded.document_type, department = excluded.department,
             competence_year = excluded.competence_year, competence_month = excluded.competence_month, indexed_at = excluded.indexed_at`,
-        args: [userId, file.relativePath, file.fileName, file.clientId, file.fileHash, file.documentType, file.department, file.competenceYear, file.competenceMonth, timestamp] },
+        args: [userId, file.relativePath, file.fileName, file.clientId, file.fileHash, file.documentType, normalizeFileIndexDepartment(file.department), file.competenceYear, file.competenceMonth, timestamp] },
         { sql: `INSERT INTO organiza_file_map_changes (user_id, revision, relative_path, operation, payload, created_at) VALUES (?, ?, ?, 'upsert', ?, ?)
           ON CONFLICT(user_id, relative_path) DO UPDATE SET revision = excluded.revision, operation = excluded.operation, payload = excluded.payload, created_at = excluded.created_at`,
           args: [userId, revision, file.relativePath, JSON.stringify({ ...file, ...(clientsById.get(asText(file.clientId)) || {}), indexedAt: timestamp }), timestamp] },
@@ -1199,7 +1200,7 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
       const fileName = typeof raw?.fileName === 'string' ? raw.fileName.trim().replace(/[\\/]/g, '').slice(0, 500) : ''
       const relativePath = safeRelativePath(raw?.relativePath)
       const clientId = typeof raw?.clientId === 'string' && knownClientIds.has(raw.clientId) ? raw.clientId : null
-      const department = ['contabil', 'fiscal', 'pessoal', 'juridico'].includes(raw?.department) ? raw.department : null
+      const department = normalizeFileIndexDepartment(raw?.department)
       const competence = typeof raw?.competence === 'string' ? raw.competence.replace(/\D/g, '') : ''
       const competenceMonth = /^(0[1-9]|1[0-2])20\d{2}$/.test(competence) ? Number(competence.slice(0, 2)) : null
       const competenceYear = competenceMonth ? Number(competence.slice(2)) : null
