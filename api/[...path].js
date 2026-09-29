@@ -4,6 +4,7 @@ import { createClient } from '@libsql/client'
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import { get, put } from '@vercel/blob'
+import { createIzzaWorkSessionMiddleware, issueIzzaWorkSession } from '../lib/izza-work-session.js'
 
 const databaseUrl = process.env.TURSO_DATABASE_URL
 const authToken = process.env.TURSO_AUTH_TOKEN
@@ -57,6 +58,22 @@ function initializeSchema() {
         file_name TEXT NOT NULL, relative_path TEXT NOT NULL, file_hash TEXT, document_type TEXT, department TEXT,
         competence_year INTEGER, competence_month INTEGER, extracted_data TEXT NOT NULL DEFAULT '{}', indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (device_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (device_id) REFERENCES organiza_devices(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS organiza_shared_file_index (
+        user_id TEXT NOT NULL, relative_path TEXT NOT NULL, file_name TEXT NOT NULL, client_id TEXT,
+        file_hash TEXT NOT NULL DEFAULT '', document_type TEXT NOT NULL DEFAULT '', department TEXT NOT NULL DEFAULT '',
+        competence_year INTEGER, competence_month INTEGER, indexed_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS organiza_file_map_state (
+        user_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0, legacy_migrated INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS organiza_file_map_changes (
+        user_id TEXT NOT NULL, relative_path TEXT NOT NULL, revision INTEGER NOT NULL,
+        operation TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
+        payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id)
       )`,
       `CREATE TABLE IF NOT EXISTS organiza_audit_logs (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
@@ -128,6 +145,8 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_clients_user ON organiza_clients(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_user ON organiza_file_index(user_id)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_map_lookup ON organiza_file_index(user_id, client_id, competence_year, competence_month)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_shared_file_map_lookup ON organiza_shared_file_index(user_id, client_id, competence_year, competence_month)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_file_map_changes_revision ON organiza_file_map_changes(user_id, revision, relative_path)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_audit_user_created ON organiza_audit_logs(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
@@ -176,7 +195,6 @@ app.use((req, res, next) => {
 })
 app.use(express.raw({ type: ['application/octet-stream', 'application/pdf', 'image/png', 'image/jpeg'], limit: '20mb' }))
 app.use(express.json({ limit: '2mb' }))
-app.use(async (_req, _res, next) => { try { await initializeSchema(); next() } catch (error) { next(error) } })
 
 const id = () => crypto.randomUUID()
 const now = () => new Date().toISOString()
@@ -184,20 +202,194 @@ const one = async (sql, args = []) => (await db.execute({ sql, args })).rows[0]
 const many = async (sql, args = []) => (await db.execute({ sql, args })).rows
 const asText = (value) => value == null ? '' : String(value)
 const asNumber = (value) => Number(value || 0)
-const parsedExtractedData = (value) => {
-  try { const parsed = JSON.parse(asText(value) || '{}'); return parsed && typeof parsed === 'object' ? parsed : {} } catch { return {} }
+async function bumpSharedFileMapRevision(tx, userId) {
+  await tx.execute({ sql: 'INSERT OR IGNORE INTO organiza_file_map_state (user_id, revision, updated_at) VALUES (?, 0, ?)', args: [userId, now()] })
+  const result = await tx.execute({ sql: 'UPDATE organiza_file_map_state SET revision = revision + 1, updated_at = ? WHERE user_id = ? RETURNING revision', args: [now(), userId] })
+  return asNumber(result.rows[0]?.revision)
 }
-const brlFromCents = (value) => (asNumber(value) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const financialSummary = (row) => {
-  const data = parsedExtractedData(row?.extractedData)
-  if (data.kind === 'payroll_receipt' && asNumber(data.totalCents)) {
-    const employees = Array.isArray(data.employees) ? data.employees.filter((item) => asText(item?.name) && asNumber(item?.netCents)).slice(0, 30) : []
-    const details = employees.length ? ` ${employees.map((item) => `${asText(item.name)}: ${brlFromCents(item.netCents)}`).join('; ')}.` : ''
-    return `Total líquido: ${brlFromCents(data.totalCents)} (${asNumber(data.employeeCount)} pessoa${asNumber(data.employeeCount) === 1 ? '' : 's'}).${details}`
+
+async function writeSharedFileMap(userId, files, { forceChanged = false } = {}) {
+  if (!files.length) return 0
+  const uniqueFiles = [...new Map(files.map((file) => [file.relativePath, file])).values()]
+  const tx = await db.transaction('write')
+  try {
+    const currentRows = (await tx.execute({ sql: `SELECT relative_path AS relativePath, file_name AS fileName, client_id AS clientId,
+    COALESCE(file_hash, '') AS fileHash, COALESCE(document_type, '') AS documentType, COALESCE(department, '') AS department,
+    competence_year AS competenceYear, competence_month AS competenceMonth
+    FROM organiza_shared_file_index WHERE user_id = ? AND relative_path IN (${uniqueFiles.map(() => '?').join(',')})`, args: [userId, ...uniqueFiles.map((file) => file.relativePath)] })).rows
+    const currentByPath = new Map(currentRows.map((row) => [asText(row.relativePath), row]))
+    const changedFiles = uniqueFiles.map((file) => ({ ...file, fileHash: file.fileHash || asText(currentByPath.get(file.relativePath)?.fileHash) }))
+      .filter((file) => {
+        if (forceChanged) return true
+        const current = currentByPath.get(file.relativePath)
+        return !current || asText(current.fileName) !== asText(file.fileName) || asText(current.clientId) !== asText(file.clientId)
+          || asText(current.fileHash) !== asText(file.fileHash) || asText(current.documentType) !== asText(file.documentType)
+          || asText(current.department) !== asText(file.department) || asNumber(current.competenceYear) !== asNumber(file.competenceYear)
+          || asNumber(current.competenceMonth) !== asNumber(file.competenceMonth)
+      })
+    if (!changedFiles.length) {
+      await tx.commit()
+      return 0
+    }
+    const revision = await bumpSharedFileMapRevision(tx, userId)
+    const timestamp = now()
+    const clientIds = [...new Set(changedFiles.map((file) => asText(file.clientId)).filter(Boolean))]
+    const clientRows = clientIds.length ? (await tx.execute({ sql: `SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients WHERE user_id = ? AND id IN (${clientIds.map(() => '?').join(',')})`, args: [userId, ...clientIds] })).rows : []
+    const clientsById = new Map(clientRows.map((client) => [asText(client.id), { code: asText(client.code), legalName: asText(client.legalName), cnpj: asText(client.cnpj) }]))
+    for (let start = 0; start < changedFiles.length; start += 200) {
+      const batchFiles = changedFiles.slice(start, start + 200)
+      await tx.batch(batchFiles.flatMap((file) => [
+        { sql: `INSERT INTO organiza_shared_file_index (user_id, relative_path, file_name, client_id, file_hash, document_type, department, competence_year, competence_month, indexed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, relative_path) DO UPDATE SET file_name = excluded.file_name, client_id = excluded.client_id,
+            file_hash = excluded.file_hash, document_type = excluded.document_type, department = excluded.department,
+            competence_year = excluded.competence_year, competence_month = excluded.competence_month, indexed_at = excluded.indexed_at`,
+        args: [userId, file.relativePath, file.fileName, file.clientId, file.fileHash, file.documentType, file.department, file.competenceYear, file.competenceMonth, timestamp] },
+        { sql: `INSERT INTO organiza_file_map_changes (user_id, revision, relative_path, operation, payload, created_at) VALUES (?, ?, ?, 'upsert', ?, ?)
+          ON CONFLICT(user_id, relative_path) DO UPDATE SET revision = excluded.revision, operation = excluded.operation, payload = excluded.payload, created_at = excluded.created_at`,
+          args: [userId, revision, file.relativePath, JSON.stringify({ ...file, ...(clientsById.get(asText(file.clientId)) || {}), indexedAt: timestamp }), timestamp] },
+      ]))
+    }
+    await tx.commit()
+    return revision
+  } catch (error) {
+    await tx.rollback().catch(() => {})
+    throw error
   }
-  if (['das', 'inss', 'fgts'].includes(data.kind) && asNumber(data.amountCents)) return `Valor da guia: ${brlFromCents(data.amountCents)}${asText(data.dueDate) ? ` · vencimento: ${asText(data.dueDate)}` : ''}.`
-  if (data.status === 'unreadable' || data.status === 'needs_reindex') return 'O documento foi encontrado, mas o valor ainda não foi lido. Use “Ler documento” no mapa financeiro.'
-  return ''
+}
+
+async function updateSharedFilesForClients(userId, clientIds, transform, { refreshClientSnapshot = false } = {}) {
+  const ids = [...new Set(clientIds.map(asText).filter(Boolean))]
+  if (!ids.length) return
+  const placeholders = ids.map(() => '?').join(',')
+  let after = ''
+  const seenCursors = new Set()
+  while (true) {
+    const files = await many(`SELECT relative_path AS relativePath, file_name AS fileName, client_id AS clientId,
+      COALESCE(file_hash, '') AS fileHash, COALESCE(document_type, '') AS documentType, COALESCE(department, '') AS department,
+      competence_year AS competenceYear, competence_month AS competenceMonth
+      FROM organiza_shared_file_index WHERE user_id = ? AND client_id IN (${placeholders}) AND relative_path > ?
+      ORDER BY relative_path LIMIT 500`, [userId, ...ids, after])
+    if (!files.length) break
+    const next = asText(files.at(-1).relativePath)
+    if (!next || next <= after || seenCursors.has(next)) throw new Error('A paginação do mapa por cliente não avançou; operação interrompida.')
+    seenCursors.add(next)
+    const transformed = files.map(transform)
+    if (refreshClientSnapshot) {
+      const paths = files.map((file) => file.relativePath)
+      const pathPlaceholders = paths.map(() => '?').join(',')
+      const pageClientIds = [...new Set(files.map((file) => asText(file.clientId)).filter(Boolean))]
+      const [changes, clients] = await Promise.all([
+        many(`SELECT relative_path AS relativePath, payload FROM organiza_file_map_changes
+          WHERE user_id = ? AND relative_path IN (${pathPlaceholders})`, [userId, ...paths]),
+        many(`SELECT id, code, legal_name AS legalName, cnpj FROM organiza_clients
+          WHERE user_id = ? AND id IN (${pageClientIds.map(() => '?').join(',')})`, [userId, ...pageClientIds]),
+      ])
+      const snapshots = new Map(changes.map((change) => {
+        try { return [asText(change.relativePath), JSON.parse(asText(change.payload) || '{}')] } catch { return [asText(change.relativePath), {}] }
+      }))
+      const clientsById = new Map(clients.map((client) => [asText(client.id), client]))
+      const staleSnapshots = transformed.filter((file) => {
+        const client = clientsById.get(asText(file.clientId))
+        if (!client) return false
+        const snapshot = snapshots.get(asText(file.relativePath)) || {}
+        return asText(snapshot.code) !== asText(client.code)
+          || asText(snapshot.legalName) !== asText(client.legalName)
+          || asText(snapshot.cnpj) !== asText(client.cnpj)
+      })
+      if (staleSnapshots.length) await writeSharedFileMap(userId, staleSnapshots, { forceChanged: true })
+    } else {
+      await writeSharedFileMap(userId, transformed)
+    }
+    after = next
+    if (files.length < 500) break
+  }
+}
+
+async function writeSharedFileMapDeletes(userId, relativePaths) {
+  if (!relativePaths.length) return 0
+  const tx = await db.transaction('write')
+  try {
+    const revision = await bumpSharedFileMapRevision(tx, userId)
+    const timestamp = now()
+    for (let start = 0; start < relativePaths.length; start += 200) {
+      const batchPaths = relativePaths.slice(start, start + 200)
+      await tx.batch(batchPaths.flatMap((relativePath) => [
+        { sql: 'DELETE FROM organiza_shared_file_index WHERE user_id = ? AND relative_path = ?', args: [userId, relativePath] },
+        { sql: `INSERT INTO organiza_file_map_changes (user_id, revision, relative_path, operation, payload, created_at) VALUES (?, ?, ?, 'delete', '{}', ?)
+          ON CONFLICT(user_id, relative_path) DO UPDATE SET revision = excluded.revision, operation = excluded.operation, payload = excluded.payload, created_at = excluded.created_at`, args: [userId, revision, relativePath, timestamp] },
+      ]))
+    }
+    await tx.commit()
+    return revision
+  } catch (error) {
+    await tx.rollback().catch(() => {})
+    throw error
+  }
+}
+
+const LEGACY_MAP_PAGE_SIZE = 500
+const LEGACY_MAP_MAX_PAGES = 200
+const LEGACY_MAP_MAX_FILES = LEGACY_MAP_PAGE_SIZE * LEGACY_MAP_MAX_PAGES
+
+async function migrateLegacyAdminMap({ userId: rawUserId, adminDeviceId: rawDeviceId } = {}) {
+  const userId = asText(rawUserId).trim()
+  const adminDeviceId = asText(rawDeviceId).trim()
+  if (!userId || !adminDeviceId) throw new Error('Informe userId e adminDeviceId para migrar o mapa legado.')
+
+  const adminDevice = await one(`SELECT id FROM organiza_devices
+    WHERE id = ? AND user_id = ? AND actor_user_id = ? LIMIT 1`, [adminDeviceId, userId, userId])
+  if (!adminDevice) throw new Error('O dispositivo informado não pertence ao administrador desse workspace.')
+
+  await db.execute({ sql: 'INSERT OR IGNORE INTO organiza_file_map_state (user_id, revision, legacy_migrated, updated_at) VALUES (?, 0, 0, ?)', args: [userId, now()] })
+  const state = await one('SELECT legacy_migrated FROM organiza_file_map_state WHERE user_id = ?', [userId])
+  if (asNumber(state?.legacy_migrated)) return { migrated: false, reason: 'already_migrated', files: 0, pages: 0 }
+  const highWaterRow = await one(`SELECT relative_path AS relativePath FROM organiza_file_index
+    WHERE user_id = ? AND device_id = ? ORDER BY relative_path DESC LIMIT 1`, [userId, adminDeviceId])
+  const highWater = asText(highWaterRow?.relativePath)
+  if (!highWater) {
+    await db.execute({ sql: 'UPDATE organiza_file_map_state SET legacy_migrated = 1, updated_at = ? WHERE user_id = ?', args: [now(), userId] })
+    return { migrated: true, files: 0, pages: 0 }
+  }
+  let after = ''
+  const seenCursors = new Set()
+  const collectedFiles = []
+  let pages = 0
+  while (after !== highWater) {
+    if (pages >= LEGACY_MAP_MAX_PAGES || collectedFiles.length >= LEGACY_MAP_MAX_FILES) {
+      throw new Error(`Migração interrompida pelo limite de segurança (${LEGACY_MAP_MAX_FILES} arquivos / ${LEGACY_MAP_MAX_PAGES} páginas). Nenhum arquivo foi gravado.`)
+    }
+    const legacyFiles = await many(`SELECT f.file_name AS fileName, f.relative_path AS relativePath, f.client_id AS clientId,
+      COALESCE(f.file_hash, '') AS fileHash, COALESCE(f.document_type, '') AS documentType, COALESCE(f.department, '') AS department,
+      f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt
+      FROM organiza_file_index f WHERE f.user_id = ? AND f.device_id = ? AND f.relative_path > ? AND f.relative_path <= ?
+      ORDER BY f.relative_path LIMIT ?`, [userId, adminDeviceId, after, highWater, LEGACY_MAP_PAGE_SIZE])
+    if (!legacyFiles.length) throw new Error('Migração interrompida: o cursor não alcançou o limite superior capturado.')
+    pages += 1
+    if (collectedFiles.length + legacyFiles.length > LEGACY_MAP_MAX_FILES) {
+      throw new Error(`Migração interrompida: o mapa legado excede o limite de ${LEGACY_MAP_MAX_FILES} arquivos. Nenhum arquivo foi gravado.`)
+    }
+    collectedFiles.push(...legacyFiles)
+    const next = asText(legacyFiles.at(-1).relativePath)
+    if (!next || next <= after || seenCursors.has(next)) throw new Error('A migração do mapa legado não avançou; operação interrompida.')
+    seenCursors.add(next)
+    after = next
+  }
+
+  for (let start = 0; start < collectedFiles.length; start += LEGACY_MAP_PAGE_SIZE) {
+    await writeSharedFileMap(userId, collectedFiles.slice(start, start + LEGACY_MAP_PAGE_SIZE))
+  }
+  await db.execute({ sql: 'UPDATE organiza_file_map_state SET legacy_migrated = 1, updated_at = ? WHERE user_id = ?', args: [now(), userId] })
+  return { migrated: true, files: collectedFiles.length, pages }
+}
+
+function requireWorkspaceAdminDevice(req, res) {
+  const userId = asText(req.user.id)
+  if (asText(req.user.role) !== 'admin' || asText(req.device.actor_user_id) !== userId) {
+    res.status(403).json({ error: 'Somente o desktop do administrador do workspace pode fazer a indexação completa do mapa.' })
+    return false
+  }
+  return true
 }
 const comparableClientCode = (value) => {
   const code = asText(value).trim().toUpperCase()
@@ -251,15 +443,17 @@ async function interpretIzzaRequestWithAI(userId, query) {
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model, store: false, max_output_tokens: 250,
-      instructions: `Você interpreta pedidos de busca de documentos do Organizza. Não responda perguntas e não invente dados. Extraia somente o que o usuário escreveu. Use mode=list para listas, plurais, intervalos e últimos meses; use mode=find para um documento específico. Normalize competências como MMAAAA. Para intervalo, preencha competenceStart e competenceEnd. Para “últimos N meses”, preencha recentMonths. Use sort=latest_competence para “último documento” e sort=latest_indexed para “último arquivo inserido/alterado”. Normalize o setor como contabil, fiscal, pessoal ou juridico. Hoje é ${new Date().toISOString().slice(0, 10)}.`,
+      instructions: `Você interpreta pedidos de busca de documentos do Organizza. Não responda perguntas e não invente dados. Extraia somente o que o usuário escreveu; você recebe apenas a pergunta, nunca documentos ou registros. Use intent=find_document para um documento, list_documents para conjunto/lista e open_folder quando pedirem para abrir uma pasta. Use mode=list para listas, plurais, intervalos e últimos meses; use mode=find para um documento específico. Normalize nomes comuns de documentos para o tipo correspondente quando claro (por exemplo, guia do Simples = DAS). Normalize competências como MMAAAA. Para intervalo, preencha competenceStart e competenceEnd. Para “últimos N meses”, preencha recentMonths. Use sort=latest_competence para “último documento” e sort=latest_indexed para “último arquivo inserido/alterado”. Normalize o setor como contabil, fiscal, pessoal ou juridico. Hoje é ${new Date().toISOString().slice(0, 10)}.`,
       input: query,
       text: { format: {
         type: 'json_schema', name: 'organizza_document_search', strict: true,
         schema: {
           type: 'object', additionalProperties: false,
           properties: {
+            intent: { type: 'string', enum: ['find_document', 'list_documents', 'open_folder'] },
             clientReference: { type: 'string' },
             documentDescription: { type: 'string' },
+            documentType: { type: 'string', description: 'Tipo canônico do documento, se reconhecível; caso contrário string vazia.' },
             competence: { type: 'string', description: 'Competência no formato MMAAAA, somente AAAA ou string vazia.' },
             competenceStart: { type: 'string', description: 'Início do intervalo em MMAAAA ou string vazia.' },
             competenceEnd: { type: 'string', description: 'Fim do intervalo em MMAAAA ou string vazia.' },
@@ -268,7 +462,7 @@ async function interpretIzzaRequestWithAI(userId, query) {
             mode: { type: 'string', enum: ['find', 'list'] },
             department: { type: 'string', enum: ['', 'contabil', 'fiscal', 'pessoal', 'juridico'] },
           },
-          required: ['clientReference', 'documentDescription', 'competence', 'competenceStart', 'competenceEnd', 'recentMonths', 'sort', 'mode', 'department'],
+          required: ['intent', 'clientReference', 'documentDescription', 'documentType', 'competence', 'competenceStart', 'competenceEnd', 'recentMonths', 'sort', 'mode', 'department'],
         },
       } },
     }),
@@ -282,9 +476,10 @@ async function interpretIzzaRequestWithAI(userId, query) {
   })
   const output = JSON.parse(responseOutputText(payload) || '{}')
   return {
-    query: [output.clientReference, output.documentDescription, output.competence, output.department].map(asText).filter(Boolean).join(' '),
+    query: [output.clientReference, output.documentDescription, output.documentType, output.competence, output.department].map(asText).filter(Boolean).join(' '),
+    intent: ['find_document', 'list_documents', 'open_folder'].includes(output.intent) ? output.intent : 'find_document',
     filters: {
-      clientReference: asText(output.clientReference), documentDescription: asText(output.documentDescription), competence: asText(output.competence),
+      clientReference: asText(output.clientReference), documentDescription: asText(output.documentDescription), documentType: asText(output.documentType), competence: asText(output.competence),
       competenceStart: asText(output.competenceStart), competenceEnd: asText(output.competenceEnd), recentMonths: Math.max(0, Math.min(36, asNumber(output.recentMonths))),
       sort: ['latest_competence', 'latest_indexed'].includes(output.sort) ? output.sort : '', department: asText(output.department),
     },
@@ -509,6 +704,8 @@ async function requireDeviceAuth(req, res, next) {
   } catch { return res.status(401).json({ error: 'Credencial de computador expirada ou inválida.' }) }
 }
 
+const requireIzzaWorkSession = createIzzaWorkSessionMiddleware(jwtSecret)
+
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
 app.post('/api/auth/register', async (req, res, next) => {
@@ -680,6 +877,9 @@ app.post('/api/organizza/clients/import', requireAuth, async (req, res, next) =>
     const userId = asText(req.user.id)
     await db.batch(clients.map((client) => ({ sql: `INSERT INTO organiza_clients (id, user_id, code, legal_name, cnpj, updated_at)
       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, code) DO UPDATE SET legal_name = excluded.legal_name, cnpj = excluded.cnpj, updated_at = excluded.updated_at`, args: [id(), userId, client.code, client.legalName, client.cnpj, now()] })), 'write')
+    const importedCodePlaceholders = clients.map(() => '?').join(',')
+    const importedClients = await many(`SELECT id FROM organiza_clients WHERE user_id = ? AND code IN (${importedCodePlaceholders})`, [userId, ...clients.map((client) => client.code)])
+    await updateSharedFilesForClients(userId, importedClients.map((client) => asText(client.id)), (file) => file, { refreshClientSnapshot: true })
     await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), userId, 'clients.imported', 'success', `${clients.length} cliente(s) importado(s) para o Organizza.`, JSON.stringify({ count: clients.length })] })
     res.status(201).json({ imported: clients.length })
   } catch (error) {
@@ -720,6 +920,7 @@ app.delete('/api/organizza/clients', requireAuth, async (req, res, next) => {
     const impact = await clientDeletionImpact(userId, clientIds)
     if (!impact.clients) return res.status(404).json({ error: 'As empresas selecionadas não foram encontradas.' })
     if (req.body?.confirmed !== true) return res.status(409).json({ error: 'Confirme a exclusão depois de revisar os vínculos.', requiresConfirmation: true, ...impact })
+    await updateSharedFilesForClients(userId, clientIds, (file) => ({ ...file, clientId: null }))
     const placeholders = clientIds.map(() => '?').join(', ')
     const relationArgs = [userId, ...clientIds]
     await db.batch([
@@ -992,6 +1193,7 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
     if (!source.length) return res.status(400).json({ error: 'Informe ao menos um arquivo para indexar.' })
     const userId = asText(req.user.id)
     const syncId = typeof req.body?.syncId === 'string' ? req.body.syncId.trim().slice(0, 80) : ''
+    if (syncId && !requireWorkspaceAdminDevice(req, res)) return
     const knownClientIds = new Set((await many('SELECT id FROM organiza_clients WHERE user_id = ?', [userId])).map((client) => asText(client.id)))
     const files = source.map((raw) => {
       const fileName = typeof raw?.fileName === 'string' ? raw.fileName.trim().replace(/[\\/]/g, '').slice(0, 500) : ''
@@ -1003,7 +1205,8 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
       const competenceYear = competenceMonth ? Number(competence.slice(2)) : null
       const documentType = typeof raw?.documentType === 'string' ? raw.documentType.trim().slice(0, 120) : ''
       const fileHash = typeof raw?.fileHash === 'string' ? raw.fileHash.trim().slice(0, 120) : ''
-      const extractedData = raw?.extractedData && typeof raw.extractedData === 'object' ? JSON.stringify(raw.extractedData).slice(0, 8000) : '{}'
+      // O índice guarda metadados de localização; payloads financeiros de versões antigas são ignorados.
+      const extractedData = '{}'
       if (!fileName || !relativePath) throw new Error('Um item do índice não possui nome ou caminho relativo válido.')
       return { fileName, relativePath, clientId, department, competenceMonth, competenceYear, documentType, fileHash, extractedData }
     })
@@ -1013,58 +1216,112 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
         ON CONFLICT(device_id, relative_path) DO UPDATE SET client_id = excluded.client_id, file_name = excluded.file_name, file_hash = CASE WHEN excluded.file_hash <> '' THEN excluded.file_hash ELSE organiza_file_index.file_hash END, document_type = excluded.document_type, department = excluded.department, competence_year = excluded.competence_year, competence_month = excluded.competence_month, extracted_data = CASE WHEN excluded.file_hash <> '' AND COALESCE(organiza_file_index.file_hash, '') <> excluded.file_hash THEN '{}' WHEN excluded.extracted_data <> '{}' THEN excluded.extracted_data ELSE organiza_file_index.extracted_data END, indexed_at = excluded.indexed_at, sync_id = CASE WHEN excluded.sync_id <> '' THEN excluded.sync_id ELSE organiza_file_index.sync_id END`,
       args: [id(), userId, asText(req.device.id), file.clientId, file.fileName, file.relativePath, file.fileHash, file.documentType, file.department, file.competenceYear, file.competenceMonth, file.extractedData, now(), syncId],
     })), 'write')
-    res.status(201).json({ indexed: files.length })
+    const revision = await writeSharedFileMap(userId, files)
+    res.status(201).json({ indexed: files.length, sharedRevision: revision })
   } catch (error) {
     if (error instanceof Error && /índice/i.test(error.message)) return res.status(400).json({ error: error.message })
     next(error)
   }
 })
 
-app.get('/api/organizza/file-index/financial-pending', requireDeviceAuth, async (req, res, next) => {
+// O primeiro download é paginado; depois, cada desktop recebe somente as mudanças desde a revisão local.
+app.get('/api/organizza/file-index/shared-map', requireDeviceAuth, async (req, res, next) => {
   try {
-    const rows = await many(`SELECT id, file_name AS fileName, relative_path AS relativePath, client_id AS clientId, file_hash AS fileHash,
-      document_type AS documentType, department, competence_year AS competenceYear, competence_month AS competenceMonth
-      FROM organiza_file_index WHERE user_id = ? AND device_id = ? AND (extracted_data IS NULL OR extracted_data = '{}' OR extracted_data = '' OR COALESCE(json_extract(extracted_data, '$.extractionVersion'), 0) < 2)
-      AND (upper(file_name) LIKE '%RECIBO%PAGAMENTO%' OR upper(file_name) LIKE '%DARF%INSS%' OR upper(file_name) LIKE '%INSS%DARF%' OR upper(file_name) LIKE '%FGTS%' OR upper(file_name) LIKE '%DAS%')
-      ORDER BY indexed_at ASC LIMIT 1000`, [asText(req.user.id), asText(req.device.id)])
-    const pending = rows.filter((row) => {
-      const name = normalizeSearchText(asText(row.fileName))
-      return /RECIBO\s+DE\s+PAGAMENTO/.test(name) || /DARF.*INSS|INSS.*DARF/.test(name) || /(^|[^A-Z])FGTS([^A-Z]|$)/.test(name) || (/(^|[^A-Z])DAS([^A-Z]|$)/.test(name) && !/DASMEI/.test(name))
-    }).map((row) => ({ id: asText(row.id), fileName: asText(row.fileName), relativePath: asText(row.relativePath), clientId: asText(row.clientId), fileHash: asText(row.fileHash), documentType: asText(row.documentType), department: asText(row.department), competenceYear: asNumber(row.competenceYear), competenceMonth: asNumber(row.competenceMonth) }))
-    res.json({ pending })
+    const userId = asText(req.user.id)
+    const state = await one('SELECT revision FROM organiza_file_map_state WHERE user_id = ?', [userId])
+    const currentRevision = asNumber(state?.revision)
+    const canIndexMap = asText(req.user.role) === 'admin' && asText(req.device.actor_user_id) === userId
+    if (req.query.revisionOnly === '1') {
+      res.json({ workspaceId: userId, revision: currentRevision, canIndexMap })
+      return
+    }
+    const sinceRaw = req.query.sinceRevision
+    if (sinceRaw == null || sinceRaw === '') {
+      const after = safeRelativePath(asText(req.query.after))
+      const rows = await many(`SELECT f.relative_path AS relativePath, f.file_name AS fileName, f.client_id AS clientId,
+        f.file_hash AS fileHash, f.document_type AS documentType, f.department,
+        f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
+        c.code, c.legal_name AS legalName, c.cnpj
+        FROM organiza_shared_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
+        WHERE f.user_id = ? AND f.relative_path > ? ORDER BY f.relative_path LIMIT 501`, [userId, after])
+      const hasMore = rows.length > 500
+      const files = rows.slice(0, 500)
+      res.json({ workspaceId: userId, revision: currentRevision, files, canIndexMap, nextCursor: files.at(-1)?.relativePath || '', done: !hasMore })
+      return
+    }
+    const sinceRevision = Math.max(0, Math.floor(Number(sinceRaw) || 0))
+    const targetRevision = Math.min(currentRevision, Math.max(sinceRevision, Math.floor(Number(req.query.targetRevision) || currentRevision)))
+    const afterRevision = Math.max(sinceRevision, Math.floor(Number(req.query.afterRevision) || sinceRevision))
+    const afterRelativePath = safeRelativePath(asText(req.query.afterRelativePath))
+    const firstPage = afterRevision === sinceRevision && !afterRelativePath
+    const changes = await many(firstPage
+      ? `SELECT revision, relative_path AS relativePath, operation, payload
+        FROM organiza_file_map_changes WHERE user_id = ? AND revision > ? AND revision <= ?
+        ORDER BY revision, relative_path LIMIT 500`
+      : `SELECT revision, relative_path AS relativePath, operation, payload
+        FROM organiza_file_map_changes WHERE user_id = ? AND revision <= ?
+        AND (revision > ? OR (revision = ? AND relative_path > ?))
+        ORDER BY revision, relative_path LIMIT 500`,
+    firstPage ? [userId, sinceRevision, targetRevision] : [userId, targetRevision, afterRevision, afterRevision, afterRelativePath])
+    res.json({ workspaceId: userId, revision: targetRevision, changes: changes.map((change) => {
+      let payload = {}
+      try { payload = JSON.parse(asText(change.payload) || '{}') } catch { payload = {} }
+      return { revision: asNumber(change.revision), relativePath: asText(change.relativePath), operation: asText(change.operation), file: payload }
+    }), canIndexMap, nextCursor: changes.length ? { revision: asNumber(changes.at(-1).revision), relativePath: asText(changes.at(-1).relativePath) } : null, done: changes.length < 500 })
   } catch (error) { next(error) }
 })
 
-app.get('/api/organizza/file-index/financial-map', requireDeviceAuth, async (req, res, next) => {
-  try {
-    const rows = await many(`SELECT f.id, f.file_name AS fileName, f.relative_path AS relativePath, f.client_id AS clientId, f.file_hash AS fileHash,
-      f.document_type AS documentType, f.department, f.competence_year AS competenceYear, f.competence_month AS competenceMonth,
-      f.extracted_data AS extractedData, f.indexed_at AS indexedAt, c.code, c.legal_name AS legalName
-      FROM organiza_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
-      WHERE f.user_id = ? AND f.device_id = ?
-      AND (upper(f.file_name) LIKE '%RECIBO%PAGAMENTO%' OR upper(f.file_name) LIKE '%DARF%INSS%' OR upper(f.file_name) LIKE '%INSS%DARF%'
-        OR upper(f.file_name) LIKE '%FGTS%' OR upper(f.file_name) LIKE '%DAS%')
-      ORDER BY c.code ASC, f.competence_year DESC, f.competence_month DESC, f.file_name ASC LIMIT 5000`, [asText(req.user.id), asText(req.device.id)])
-    const financialRows = rows.filter((row) => {
-      const name = normalizeSearchText(asText(row.fileName))
-      return /RECIBO\s+DE\s+PAGAMENTO/.test(name) || /DARF.*INSS|INSS.*DARF/.test(name)
-        || /(^|[^A-Z])FGTS([^A-Z]|$)/.test(name) || (/(^|[^A-Z])DAS([^A-Z]|$)/.test(name) && !/DASMEI/.test(name))
-    })
-    const documents = financialRows.map((row) => ({
-      id: asText(row.id), fileName: asText(row.fileName), relativePath: asText(row.relativePath), clientId: asText(row.clientId), fileHash: asText(row.fileHash),
-      documentType: asText(row.documentType), department: asText(row.department), competenceYear: asNumber(row.competenceYear), competenceMonth: asNumber(row.competenceMonth),
-      extractedData: parsedExtractedData(row.extractedData), indexedAt: asText(row.indexedAt), client: { code: asText(row.code), legalName: asText(row.legalName) },
-    }))
-    res.json({ documents })
-  } catch (error) { next(error) }
-})
+// Compatibilidade com versões antigas do Desktop: não consultar o índice nem iniciar extração financeira.
+app.get('/api/organizza/file-index/financial-pending', (_req, res) => res.json({ pending: [] }))
+app.get('/api/organizza/file-index/financial-map', (_req, res) => res.json({ documents: [] }))
 
 app.post('/api/organizza/file-index/sync-complete', requireDeviceAuth, async (req, res, next) => {
   try {
+    if (!requireWorkspaceAdminDevice(req, res)) return
     const syncId = typeof req.body?.syncId === 'string' ? req.body.syncId.trim().slice(0, 80) : ''
     if (!syncId) return res.status(400).json({ error: 'Identificador da sincronização não informado.' })
-    const result = await db.execute({ sql: 'DELETE FROM organiza_file_index WHERE user_id = ? AND device_id = ? AND sync_id <> ?', args: [asText(req.user.id), asText(req.device.id), syncId] })
-    res.json({ removed: asNumber(result.rowsAffected) })
+    const userId = asText(req.user.id)
+    let cursor = ''
+    let sharedRemoved = 0
+    const seenCursors = new Set()
+    while (true) {
+      const stale = await many(`SELECT m.relative_path AS relativePath FROM organiza_shared_file_index m
+        LEFT JOIN organiza_file_index f ON f.user_id = m.user_id AND f.device_id = ? AND f.relative_path = m.relative_path AND f.sync_id = ?
+        WHERE m.user_id = ? AND m.relative_path > ? AND f.relative_path IS NULL
+        ORDER BY m.relative_path LIMIT 500`, [asText(req.device.id), syncId, userId, cursor])
+      if (!stale.length) break
+      const paths = stale.map((item) => asText(item.relativePath))
+      const next = paths.at(-1)
+      if (!next || next <= cursor || seenCursors.has(next)) throw new Error('A paginação de arquivos obsoletos não avançou; sincronização interrompida.')
+      seenCursors.add(next)
+      await writeSharedFileMapDeletes(userId, paths)
+      sharedRemoved += paths.length
+      cursor = next
+      if (stale.length < 500) break
+    }
+
+    let indexCursor = ''
+    let removed = 0
+    const seenIndexCursors = new Set()
+    while (true) {
+      const staleIndex = await many(`SELECT relative_path AS relativePath FROM organiza_file_index
+        WHERE user_id = ? AND device_id = ? AND sync_id <> ? AND relative_path > ?
+        ORDER BY relative_path LIMIT 500`, [userId, asText(req.device.id), syncId, indexCursor])
+      if (!staleIndex.length) break
+      const paths = staleIndex.map((item) => asText(item.relativePath))
+      const next = paths.at(-1)
+      if (!next || next <= indexCursor || seenIndexCursors.has(next)) throw new Error('A paginação do índice obsoleto não avançou; sincronização interrompida.')
+      seenIndexCursors.add(next)
+      const results = await db.batch(paths.map((relativePath) => ({
+        sql: 'DELETE FROM organiza_file_index WHERE user_id = ? AND device_id = ? AND relative_path = ? AND sync_id <> ?',
+        args: [userId, asText(req.device.id), relativePath, syncId],
+      })), 'write')
+      removed += results.reduce((total, result) => total + asNumber(result.rowsAffected), 0)
+      indexCursor = next
+      if (staleIndex.length < 500) break
+    }
+    const state = await one('SELECT revision FROM organiza_file_map_state WHERE user_id = ?', [userId])
+    res.json({ removed, sharedRemoved, sharedRevision: asNumber(state?.revision) })
   } catch (error) { next(error) }
 })
 
@@ -1255,8 +1512,6 @@ async function searchWithIzza(req, res, next) {
     const requestedFinancialKind = explicitFinancialRequest?.kind || financialKindByRule[normalizeSearchText(documentRuleForSearch?.name)] || ''
     const matchesRequestedDocument = (row, documentText) => {
       if (!requestedFinancialKind) return !requestedDocumentTerms.length || requestedDocumentTerms.every((term) => containsRequestedTerm(documentText, term))
-      const extracted = parsedExtractedData(row.extractedData)
-      if (asText(extracted.kind)) return asText(extracted.kind) === requestedFinancialKind
       const fileName = normalizeSearchText(row.fileName)
       const department = asText(row.department)
       if (requestedFinancialKind === 'das') {
@@ -1283,7 +1538,7 @@ async function searchWithIzza(req, res, next) {
       department: inferredDepartment,
       competence: requestedYear && (competence?.month || namedMonth) ? `${String(competence?.month || namedMonth).padStart(2, '0')}${requestedYear}` : '',
     } : null
-    const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.client_id AS clientId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department, f.extracted_data AS extractedData,
+    const rows = await many(`SELECT f.id, f.device_id AS deviceId, f.client_id AS clientId, f.file_name AS fileName, f.relative_path AS relativePath, f.document_type AS documentType, f.department,
       f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
       c.code, c.legal_name AS legalName, c.cnpj
       FROM organiza_file_index f LEFT JOIN organiza_clients c ON c.id = f.client_id
@@ -1336,7 +1591,7 @@ async function searchWithIzza(req, res, next) {
         id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
         competence: row.competenceMonth && row.competenceYear ? `${String(asNumber(row.competenceMonth)).padStart(2, '0')}${asNumber(row.competenceYear)}` : '',
         client: row.legalName ? { code: asText(row.code).startsWith('SEM-CODIGO-') ? '' : asText(row.code), legalName: asText(row.legalName), cnpj: asText(row.cnpj) } : null,
-        indexedAt: asText(row.indexedAt), extractedData: parsedExtractedData(row.extractedData),
+        indexedAt: asText(row.indexedAt),
       }))
       const folderRows = listed.filter((row) => asText(row.deviceId) === asText(listed[0]?.deviceId))
       const directories = folderRows.map((row) => safeRelativePath(asText(row.relativePath)).split('/').slice(0, -1)).filter((parts) => parts.length)
@@ -1349,9 +1604,8 @@ async function searchWithIzza(req, res, next) {
       const place = [inferredDepartment ? `do Dpto ${inferredDepartment.charAt(0).toUpperCase()}${inferredDepartment.slice(1)}` : '', requestedYear ? `de ${requestedYear}` : ''].filter(Boolean).join(' ')
       const foundKeys = new Set(listed.map((row) => (asNumber(row.competenceYear) * 100) + asNumber(row.competenceMonth)))
       const missingRecent = recentMonths ? [...recentKeys].filter((key) => !foundKeys.has(key)).sort().map((key) => `${String(key % 100).padStart(2, '0')}/${Math.floor(key / 100)}`) : []
-      const financialCount = listed.filter((row) => financialSummary(row)).length
       const summary = listed.length
-        ? `Encontrei ${listed.length} documento(s) ${place} para ${asText(client.legalName)}.${financialCount ? ` ${financialCount} com valores extraídos, exibidos em cada documento.` : ''}${missingRecent.length ? ` Não encontrei: ${missingRecent.join(', ')}.` : ''}${listed.length > 100 ? ' Estou mostrando os 100 mais recentes.' : ''}`
+        ? `Encontrei ${listed.length} documento(s) ${place} para ${asText(client.legalName)}.${missingRecent.length ? ` Não encontrei: ${missingRecent.join(', ')}.` : ''}${listed.length > 100 ? ' Estou mostrando os 100 mais recentes.' : ''}`
         : `Não encontrei os documentos solicitados para ${asText(client.legalName)}. Continue pelas opções abaixo.`
       return res.json({ query: originalQuery, deterministic: !aiInterpreted, aiInterpreted, mode: 'list', summary, results, suggestedFolder: mappedFolder || suggestedFolder, resolvedClient, needsGuidance: !listed.length, recognized: { year: requestedYear || competenceStart?.year || 0, department: inferredDepartment, month: competence?.month || namedMonth || 0 } })
     }
@@ -1371,25 +1625,50 @@ async function searchWithIzza(req, res, next) {
         id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
         competence: row.competenceMonth && row.competenceYear ? `${String(asNumber(row.competenceMonth)).padStart(2, '0')}${asNumber(row.competenceYear)}` : '',
         client: row.legalName ? { code: asText(row.code).startsWith('SEM-CODIGO-') ? '' : asText(row.code), legalName: asText(row.legalName), cnpj: asText(row.cnpj) } : null,
-        indexedAt: asText(row.indexedAt), extractedData: parsedExtractedData(row.extractedData),
+        indexedAt: asText(row.indexedAt),
       }))
-      const financialCount = exact.filter((row) => financialSummary(row)).length
-      return res.json({ query, deterministic: true, summary: `Encontrei ${exact.length} documentos possíveis.${financialCount ? ` ${financialCount} com valores extraídos, exibidos em cada documento.` : ''} Escolha uma das opções abaixo.`, results: candidates, resolvedClient, needsGuidance: true, recognized: { year: requestedYear || 0, department: inferredDepartment, month: competence?.month || namedMonth || 0 } })
+      return res.json({ query, deterministic: true, summary: `Encontrei ${exact.length} documentos possíveis. Escolha uma das opções abaixo.`, results: candidates, resolvedClient, needsGuidance: true, recognized: { year: requestedYear || 0, department: inferredDepartment, month: competence?.month || namedMonth || 0 } })
     }
     const results = exact.map((row) => ({
       id: asText(row.id), deviceId: asText(row.deviceId), fileName: asText(row.fileName), relativePath: asText(row.relativePath), documentType: asText(row.documentType), department: asText(row.department),
       competence: row.competenceMonth && row.competenceYear ? `${String(asNumber(row.competenceMonth)).padStart(2, '0')}${asNumber(row.competenceYear)}` : '',
       client: row.legalName ? { code: asText(row.code).startsWith('SEM-CODIGO-') ? '' : asText(row.code), legalName: asText(row.legalName), cnpj: asText(row.cnpj) } : null,
-      indexedAt: asText(row.indexedAt), extractedData: parsedExtractedData(row.extractedData),
+      indexedAt: asText(row.indexedAt),
     }))
-    const details = financialSummary(exact[0])
-    const summary = `Prontinho! Encontrei o documento exato de ${asText(client.legalName)}.${details ? ` ${details}` : ''}`
+    const summary = `Prontinho! Encontrei o documento exato de ${asText(client.legalName)}.`
     res.json({ query: originalQuery, deterministic: !aiInterpreted, aiInterpreted, summary, results })
   } catch (error) { next(error) }
 }
 
-app.post('/api/organizza/izza/search', requireAuth, searchWithIzza)
-app.post('/api/integrations/one/izza/search', requireOneIntegration, searchWithIzza)
+app.post('/api/organizza/izza/work-session', requireDeviceAuth, (req, res) => {
+  const token = issueIzzaWorkSession({ workspaceId: asText(req.user.id), deviceId: asText(req.device.id), secret: jwtSecret })
+  res.status(201).json({ workSession: token, expiresIn: 12 * 60 * 60 })
+})
+
+// Interpreta somente a pergunta; a Work Session é validada localmente, sem SELECTs de autenticação.
+app.post('/api/organizza/izza/interpret', requireIzzaWorkSession, async (req, res) => {
+  const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 500) : ''
+  if (query.length < 2) return res.status(400).json({ error: 'Escreva ao menos dois caracteres para a Izza interpretar.' })
+  try {
+    const interpretation = await interpretIzzaRequestWithAI(asText(req.user.id), query)
+    return res.json({
+      intent: interpretation.intent,
+      filters: interpretation.filters,
+      mode: interpretation.mode,
+      aiInterpreted: true,
+    })
+  } catch (error) {
+    console.error('[Izza interpretation unavailable]', error)
+    return res.status(503).json({ error: 'A interpretação da Izza está indisponível no momento.', interpretationUnavailable: true })
+  }
+})
+
+const legacyIzzaSearchUnavailable = (_req, res) => res.status(410).json({
+  error: 'A busca documental legada da Izza está temporariamente indisponível.',
+  code: 'LEGACY_IZZA_SEARCH_DISABLED',
+})
+app.post('/api/organizza/izza/search', legacyIzzaSearchUnavailable)
+app.post('/api/integrations/one/izza/search', legacyIzzaSearchUnavailable)
 
 app.post('/api/integrations/one/documents/tree', requireOneIntegration, async (req, res, next) => {
   try {
@@ -1687,6 +1966,9 @@ app.delete('/api/organizza/data', requireAuth, requireOrganizzaOwner, async (req
       { sql: 'DELETE FROM organiza_folder_nodes WHERE structure_id IN (SELECT id FROM organiza_folder_structures WHERE user_id = ?)', args: [userId] },
       { sql: 'DELETE FROM organiza_folder_structures WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_file_index WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_shared_file_index WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_file_map_changes WHERE user_id = ?', args: [userId] },
+      { sql: 'DELETE FROM organiza_file_map_state WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_pending_files WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_commands WHERE user_id = ?', args: [userId] },
       { sql: 'DELETE FROM organiza_events WHERE user_id = ?', args: [userId] },
@@ -1921,5 +2203,8 @@ app.use((error, req, res, _next) => {
   if (status === 413) return res.status(413).json({ error: 'A estrutura possui pastas demais para um único envio. Atualize o Desktop e tente novamente; ele sincroniza a árvore em lotes seguros.', code: 'STRUCTURE_PAYLOAD_TOO_LARGE' })
   res.status(status >= 400 && status < 500 ? status : 500).json({ error: status >= 500 ? `Não foi possível concluir a operação. Tente novamente; se continuar, informe ${supportCode} ao suporte.` : message, code: status >= 500 ? supportCode : 'REQUEST_ERROR' })
 })
+
+app.initializeSchema = initializeSchema
+app.migrateLegacyAdminMap = migrateLegacyAdminMap
 
 export default app
