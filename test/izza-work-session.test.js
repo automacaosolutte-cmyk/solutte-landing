@@ -97,6 +97,22 @@ test('rota de interpretação usa somente a Work Session e não consulta device/
   assert.doesNotMatch(authSource, /SELECT|db\.execute|organiza_devices|FROM users/)
 })
 
+test('contrato de interpretação preserva modos temporais e suporta lista explícita', () => {
+  const source = readFileSync(new URL('../api/[...path].js', import.meta.url), 'utf8')
+  const start = source.indexOf('async function interpretIzzaRequestWithAI')
+  const end = source.indexOf('async function loadOpenAIOrganizationUsage', start)
+  const contract = source.slice(start, end)
+  assert.match(contract, /competences: \{ type: 'array', maxItems: 36/)
+  assert.match(contract, /temporalMode: \{ type: 'string'/)
+  assert.match(contract, /temporalCount: \{ type: 'integer'/)
+  assert.match(contract, /competenceStart/)
+  assert.match(contract, /competenceEnd/)
+  assert.match(contract, /recentMonths/)
+  assert.match(contract, /recentMonths e deixe o calendário para o código local/)
+  assert.match(contract, /Array\.isArray\(output\.competences\)/)
+  assert.match(contract, /\.slice\(0, 36\)/)
+})
+
 test('rotas de busca legadas falham sem alcançar searchWithIzza', () => {
   const source = readFileSync(new URL('../api/[...path].js', import.meta.url), 'utf8')
   assert.match(source, /const legacyIzzaSearchUnavailable = \(_req, res\) => res\.status\(410\)\.json\(/)
