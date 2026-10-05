@@ -1,8 +1,8 @@
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { API_URL, ORGANIZZA_URL, SYSTEM_ACCESS_URL } from './config'
+import './landing.css'
 
-const LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-tech-mark.png`
-const FULL_LOGO_ASSET = `${import.meta.env.BASE_URL}assets/solutte-full-lockup-cropped.png`
+const FULL_LOGO_ASSET = `${import.meta.env.BASE_URL}assets/brand/organizza/logo-official.png`
 
 type RevealProps = {
   children: ReactNode
@@ -10,16 +10,7 @@ type RevealProps = {
   delay?: number
 }
 
-const benefits = [
-  ['01', 'Organização', 'Tudo que precisa ser feito, no lugar certo e no tempo certo.'],
-  ['02', 'Agilidade', 'Menos etapas manuais. Mais espaço para decisões que importam.'],
-  ['03', 'Comodidade', 'Sua operação flui com clareza, de onde você estiver.'],
-  ['04', 'Praticidade', 'Processos simples para uma rotina mais leve e produtiva.'],
-]
-
-function SolutteLogo() {
-  return <a className="brand brand--full" href="#inicio" aria-label="Solutte Automações Empresariais — página inicial"><img className="brand__full-lockup" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></a>
-}
+const ORGANIZZA_ASSETS = `${import.meta.env.BASE_URL}assets/brand/organizza`
 
 function Reveal({ children, className = '', delay = 0 }: RevealProps) {
   const element = useRef<HTMLDivElement>(null)
@@ -62,115 +53,142 @@ function ThemeToggle() {
 
 function LandingPage() {
   return (
-    <main>
-      <header className="site-header site-header--menu">
-        <nav className="site-nav" aria-label="Navegação principal">
-          <a href="#solucoes">Soluções</a>
-          <a href="#produtos">Produtos</a>
-          <a href="#beneficios">Benefícios</a>
-          <a href="#como-funciona">Como funciona</a>
-          <a href="#planos">Planos</a>
-          <a href="#contato">Contato</a>
+    <main className="organizza-landing">
+      <header className="oz-header">
+        <a className="oz-logo" href="#inicio" aria-label="Organizza — página inicial">
+          <span className="oz-asset-frame oz-asset-frame--logo"><img src={`${ORGANIZZA_ASSETS}/logo-official.png`} alt="Organizza" /></span>
+        </a>
+        <nav className="oz-nav" aria-label="Navegação principal">
+          <a href="#fluxo">Como funciona</a>
+          <a href="#izza">Izza</a>
+          <a href="#produto">Produto</a>
         </nav>
         <AccessButton compact />
       </header>
 
-      <section id="inicio" className="hero section-shell">
-        <div className="hero__copy">
-          <div className="hero-brand-lockup"><img src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></div>
-          <p className="eyebrow">Automações empresariais</p>
-          <h1>Inteligência que <em>simplifica</em> processos.</h1>
-          <p className="hero__description">A Solutte Automações Empresariais conecta tecnologia e automação para transformar a sua operação, reduzir tarefas manuais e gerar resultados reais.</p>
-          <div className="hero__actions">
-            <a className="primary-link" href="#planos">Solicitar demonstração <span aria-hidden="true">→</span></a>
-            <a className="secondary-link" href="#como-funciona"><span aria-hidden="true">▷</span> Ver como funciona</a>
-          </div>
-          <div className="hero__trust">
-            <span><b>♢</b> Segurança de dados<br />e conformidade</span>
-            <span><b>☁</b> Solução 100% em nuvem<br />com alta disponibilidade</span>
-            <span><b>◌</b> Suporte especializado<br />sempre que precisar</span>
+      <section id="inicio" className="oz-hero oz-shell">
+        <div className="oz-hero__copy">
+          <p className="oz-kicker"><span /> Organização que acompanha o trabalho</p>
+          <h1>Tudo organizado.<br /><em>Sempre em movimento.</em></h1>
+          <p>Documentos, empresas e rotinas conectados em um ambiente inteligente — para o seu escritório saber onde está e o que vem depois.</p>
+          <div className="oz-actions">
+            <AccessButton />
+            <a className="oz-link" href="#produto">Conhecer o Organizza <span aria-hidden="true">↓</span></a>
           </div>
         </div>
-        <div className="scroll-hint" aria-hidden="true"><span /> Role para descobrir</div>
-      </section>
-
-      <section id="solucoes" className="statement section-shell">
-        <Reveal>
-          <p className="eyebrow">Soluções completas</p>
-          <h2>Tudo que sua operação precisa para <em>avançar.</em></h2>
-        </Reveal>
-        <Reveal className="statement__detail" delay={110}>
-          <p>Automatize processos, integre informações e tenha o controle necessário para tomar decisões melhores e mais rápidas.</p>
-        </Reveal>
-      </section>
-
-      <section id="como-funciona" className="transformation">
-        <div className="section-shell transformation__heading">
-          <Reveal>
-            <p className="eyebrow eyebrow--light">Do manual ao essencial</p>
-            <h2>Menos atrito.<br /><em>Mais movimento.</em></h2>
-          </Reveal>
-          <Reveal delay={120}><p>Uma nova forma de trabalhar começa quando o esforço repetitivo deixa de ser o centro da sua rotina.</p></Reveal>
-        </div>
-        <div className="process-stage" aria-label="Fluxo que transforma solicitações em entregas concluídas" role="img">
-          <div className="stage-grid" />
-          <div className="process-line process-line--left" />
-          <div className="process-line process-line--right" />
-          <div className="process-pill process-pill--one"><span className="pill-icon">+</span> Nova demanda</div>
-          <div className="process-pill process-pill--two"><span className="pill-icon pill-icon--blue">↗</span> Em andamento</div>
-          <div className="process-pill process-pill--three"><span className="pill-icon pill-icon--red">✓</span> Finalizado</div>
-          <div className="process-core"><span>Solutte<br />Automações Empresariais</span><b>Fluxo<br />inteligente</b></div>
-          <span className="travel-dot travel-dot--one" /><span className="travel-dot travel-dot--two" />
+        <div className="oz-product-window" aria-label="Demonstração visual da interface do Organizza">
+          <div className="oz-window-bar"><i /><i /><i /><span>Organizza</span><b>Ambiente conectado</b></div>
+          <div className="oz-window-body">
+            <aside className="oz-sidebar" aria-hidden="true">
+              <span className="oz-sidebar__brand"><img src={`${ORGANIZZA_ASSETS}/icon-official.png`} alt="" /></span>
+              <b>Visão geral</b><span className="is-active">Documentos</span><span>Empresas</span><span>Não Processados</span><span>Mapa local</span>
+            </aside>
+            <div className="oz-file-view">
+              <div className="oz-file-heading"><div><small>EMPRESA 059</small><strong>Documentos fiscais</strong></div><span>Julho · 2026</span></div>
+              <div className="oz-folder-row"><span className="oz-folder-icon">⌑</span><div><b>DAS</b><small>059 - DAS - 072026.pdf</small></div><i>PDF</i></div>
+              <div className="oz-folder-row"><span className="oz-folder-icon">⌑</span><div><b>Extrato do Simples</b><small>Competência 07/2026</small></div><i>PDF</i></div>
+              <div className="oz-map-line"><span /><span /><span /><span /></div>
+            </div>
+            <div className="oz-izza-card">
+              <span className="oz-izza-card__avatar"><img src={`${ORGANIZZA_ASSETS}/izza-hero.png`} alt="Izza, assistente do Organizza" /></span>
+              <small>IZZA</small><strong>O que você precisa encontrar?</strong>
+              <div>Me dê o DAS da empresa 59 de julho de 2026.</div>
+              <p><span>✓</span> Prontinho. Encontrei o documento.</p>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section id="beneficios" className="benefits section-shell">
-        <Reveal><p className="eyebrow">Feito para a rotina real</p><h2>O que melhora quando tudo <em>se conecta.</em></h2></Reveal>
-        <div className="benefit-grid">
-          {benefits.map(([number, title, text], index) => (
-            <Reveal key={title} className="benefit" delay={index * 80}>
-              <span className="benefit__number">{number}</span>
-              <h3>{title}</h3>
-              <p>{text}</p>
-              <span className="benefit__line" />
+      <section id="fluxo" className="oz-flow oz-shell">
+        <Reveal className="oz-section-heading">
+          <p className="oz-kicker">Do recebimento ao lugar certo</p>
+          <h2>Se chegou ao Organizza,<br />você sabe onde encontrar.</h2>
+          <p>O documento entra. O Organizza identifica, estrutura e mantém tudo disponível para a rotina continuar.</p>
+        </Reveal>
+        <div className="oz-flow-track" aria-label="Documento recebido, identificado, organizado e disponível">
+          {[
+            ['01', 'Chegou', 'Um documento entra na rotina.'],
+            ['02', 'Identificou', 'Empresa, tipo e competência.'],
+            ['03', 'Organizou', 'Cada informação no seu lugar.'],
+            ['04', 'Disponível', 'Pronto quando você precisar.'],
+          ].map(([number, title, copy], index) => (
+            <Reveal className="oz-flow-step" delay={index * 80} key={title}>
+              <span>{number}</span><div><h3>{title}</h3><p>{copy}</p></div>
             </Reveal>
           ))}
         </div>
       </section>
 
-      <section id="produtos" className="products section-shell">
-        <Reveal className="products__intro"><p className="eyebrow">Produtos Solutte</p><h2>Soluções que dão <em>espaço para avançar.</em></h2><p>Uma plataforma em expansão para organizar, automatizar e simplificar diferentes partes da sua rotina.</p></Reveal>
-        <div className="product-grid">
-          <Reveal className="product-card product-card--organizza" delay={40}>
-            <div className="card-copy"><span className="card-kicker">Solutte Organizza</span><h3>Arquivos organizados. Respostas à distância de uma pergunta.</h3><p>Centralize pastas e documentos com a Izza, a IA que ajuda você a encontrar o que precisa sem perder tempo procurando.</p></div>
-            <div className="organizza-visual" aria-hidden="true"><img src={FULL_LOGO_ASSET} alt="" /><div>◌ Pergunte à Izza <b>⌕</b></div></div>
+      <section id="pergunte" className="oz-ask">
+        <div className="oz-shell oz-ask__grid">
+          <Reveal className="oz-ask__copy">
+            <p className="oz-kicker oz-kicker--dark">Izza + Organizza</p>
+            <h2>Não procure.<br /><em>Pergunte.</em></h2>
+            <p>A Izza entende o que você quer. O Organizza sabe onde está.</p>
           </Reveal>
-          <Reveal className="product-card product-card--accounting" delay={110}>
-            <div className="card-copy"><span className="card-kicker">Solutte Contábil</span><h3>Setores conectados, processos em movimento.</h3><p>Módulos para estruturar rotinas contábeis por área, diminuir retrabalho e acompanhar cada etapa com clareza.</p></div>
-            <div className="accounting-visual" aria-hidden="true"><span>Fiscal</span><span>Contábil</span><span>DP</span><span>Societário</span><span>+</span><i /></div>
-          </Reveal>
-          <Reveal className="product-card product-card--mei" delay={180}>
-            <div className="card-copy"><span className="card-kicker">Solutte MEI</span><h3>Informações certas, para cada MEI cadastrado.</h3><p>Um programa para organizar e encaminhar comunicações importantes aos microempreendedores de sua base.</p></div>
-            <div className="mei-visual" aria-hidden="true"><span>MEI</span><i>→</i><span>DASMEI</span><i>→</i><span>+</span></div>
-          </Reveal>
-          <Reveal className="product-card product-card--personal" delay={250}>
-            <div className="card-copy"><span className="card-kicker">Solutte Pessoal</span><h3>Uma rotina de casa mais leve.</h3><p>Um assistente para apoiar o planejamento das compras e deixar as decisões do dia a dia mais práticas.</p></div>
-            <div className="personal-visual" aria-hidden="true"><span>✓ Lista pronta</span><span>○ Itens da semana</span><span>✓ Melhor escolha</span></div>
+          <Reveal className="oz-conversation" delay={100}>
+            <div className="oz-message oz-message--user"><small>VOCÊ</small>Me dê o DAS da empresa 59 de julho de 2026.</div>
+            <div className="oz-message oz-message--izza"><span><img src={`${ORGANIZZA_ASSETS}/izza-encontrando.png`} alt="" /></span><div><small>IZZA</small><p>Prontinho. Encontrei o documento.</p><article><i>PDF</i><b>059 - DAS - 072026.pdf</b><em>Fiscal · Julho de 2026</em></article></div></div>
           </Reveal>
         </div>
       </section>
 
-      <section id="planos" className="closing section-shell">
+      <section id="estrutura" className="oz-structure oz-shell">
+        <Reveal className="oz-section-heading oz-section-heading--center">
+          <p className="oz-kicker">Uma estrutura para o escritório inteiro</p>
+          <h2>A informação deixa de ficar espalhada.</h2>
+          <p>Empresas, departamentos, competências e documentos passam a fazer parte do mesmo ambiente.</p>
+        </Reveal>
+        <Reveal className="oz-structure-map" delay={100}>
+          <div className="oz-tree-main"><span><img src={`${ORGANIZZA_ASSETS}/icon-official.png`} alt="" /></span><div><small>AMBIENTE</small><b>Seu escritório</b><em>Organizado pelo Organizza</em></div></div>
+          <div className="oz-tree-branches" aria-label="Empresas, departamentos, documentos, competências, processos, pendências e regras conectados">
+            {['Empresas', 'Departamentos', 'Documentos', 'Competências', 'Processos', 'Pendências', 'Regras'].map((item, index) => <span key={item} style={{ '--branch': index } as CSSProperties}>{item}</span>)}
+          </div>
+        </Reveal>
+      </section>
+
+      <section id="izza" className="oz-izza oz-shell">
+        <Reveal className="oz-izza__portrait">
+          <div className="oz-asset-frame oz-asset-frame--izza"><img loading="lazy" src={`${ORGANIZZA_ASSETS}/izza-full.png`} alt="Izza, assistente inteligente do Organizza" /></div>
+        </Reveal>
+        <Reveal className="oz-izza__copy" delay={90}>
+          <p className="oz-kicker">Conheça a Izza</p>
+          <h2>Uma assistente que conhece o seu ambiente.</h2>
+          <p>A Izza ajuda você a localizar documentos, navegar por empresas e entender o que está pendente — usando a estrutura do Organizza para chegar à resposta.</p>
+          <ul><li>Encontra documentos pela sua pergunta</li><li>Navega pelo ambiente organizado</li><li>Ajuda a visualizar pendências da rotina</li></ul>
+          <small>Novas ações assistidas serão incorporadas progressivamente ao produto.</small>
+        </Reveal>
+      </section>
+
+      <section id="produto" className="oz-product oz-shell">
+        <Reveal className="oz-section-heading oz-section-heading--center">
+          <p className="oz-kicker">Produto real. Rotina real.</p>
+          <h2>Clareza para trabalhar.<br />Estrutura para crescer.</h2>
+        </Reveal>
+        <Reveal className="oz-product-showcase" delay={100}>
+          <div className="oz-product-tabs"><span className="is-active">Documentos</span><span>Mapa</span><span>Não Processados</span><span>Empresas</span><span>Izza</span></div>
+          <div className="oz-product-grid">
+            <div className="oz-product-list"><header><div><small>MAPA LOCAL</small><b>Empresa 059</b></div><span>30.184 arquivos</span></header>{['Fiscal', 'Contábil', 'Pessoal', 'Jurídico'].map((department, index) => <div className={index === 0 ? 'is-active' : ''} key={department}><span>0{index + 1}</span><b>{department}</b><small>{index === 0 ? '12 competências' : 'Organizado'}</small></div>)}</div>
+            <div className="oz-product-detail"><small>FISCAL / 2026</small><h3>Julho</h3><div className="oz-doc-card"><i>PDF</i><span><b>059 - DAS - 072026.pdf</b><small>Documento identificado · pronto para abrir</small></span><em>→</em></div><div className="oz-doc-card"><i>PDF</i><span><b>Extrato Declaratório</b><small>Simples Nacional · 07/2026</small></span><em>→</em></div><div className="oz-product-art" aria-hidden="true"><img loading="lazy" src={`${ORGANIZZA_ASSETS}/ui-cards.png`} alt="" /></div></div>
+          </div>
+        </Reveal>
+      </section>
+
+      <section id="planos" className="oz-closing oz-shell">
         <Reveal>
-          <span className="closing__spark" aria-hidden="true">✦</span>
-          <p className="eyebrow">Simplifique o que move sua empresa</p>
-          <h2>Mais leve para operar.<br /><em>Melhor para crescer.</em></h2>
-          <p>Um novo ritmo para os seus processos começa aqui.</p>
+          <span className="oz-closing__symbol"><img loading="lazy" src={`${ORGANIZZA_ASSETS}/icon-official.png`} alt="" /></span>
+          <p className="oz-kicker oz-kicker--dark">Um novo ritmo para o seu escritório</p>
+          <h2>Seu escritório pode<br />funcionar de outro jeito.</h2>
+          <p>Conheça um ambiente feito para organizar a informação e deixar o trabalho seguir.</p>
           <AccessButton />
         </Reveal>
       </section>
 
-      <footer id="contato" className="site-footer section-shell"><SolutteLogo /><span>Automações empresariais que fazem sentido.</span><span>© {new Date().getFullYear()} Solutte Automações Empresariais</span></footer>
+      <footer id="contato" className="oz-footer oz-shell">
+        <a className="oz-logo" href="#inicio" aria-label="Organizza — voltar ao início"><span className="oz-asset-frame oz-asset-frame--logo"><img loading="lazy" src={`${ORGANIZZA_ASSETS}/logo-official.png`} alt="Organizza" /></span></a>
+        <span>Organização documental e inteligência para escritórios.</span>
+        <span>Uma solução Solutte · © {new Date().getFullYear()}</span>
+      </footer>
     </main>
   )
 }
@@ -227,7 +245,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 function PortalBrand() {
-  return <span className="portal-lockup"><img className="portal-brand" src={FULL_LOGO_ASSET} alt="Solutte Automações Empresariais" /></span>
+  return <span className="portal-lockup"><img className="portal-brand" src={FULL_LOGO_ASSET} alt="Organizza" /></span>
 }
 
 function BackToLanding() {
@@ -299,11 +317,11 @@ function AuthPortal() {
         <BackToLanding />
         <PortalBrand />
         <div>
-          <p className="portal-eyebrow">Área do cliente</p>
-          <h1>Automação que<br /><em>segue com você.</em></h1>
-          <p>Centralize sua operação, acompanhe o que importa e dê espaço para o seu time avançar.</p>
+          <p className="portal-eyebrow">Seu ambiente organizado</p>
+          <h1>Tudo no lugar.<br /><em>Pronto para você.</em></h1>
+          <p>Entre para acessar empresas, documentos e a inteligência da Izza no mesmo ambiente.</p>
         </div>
-        <div className="portal-intro__flow" aria-hidden="true"><span /><span /><span /><i /><i /></div>
+        <img className="portal-intro__izza" src={`${ORGANIZZA_ASSETS}/izza-full.png`} alt="Izza, assistente inteligente do Organizza" />
       </div>
 
       <section className="auth-panel" aria-live="polite">
@@ -539,8 +557,9 @@ function App() {
     return () => window.removeEventListener('hashchange', syncRoute)
   }, [])
 
+  const isLanding = route !== '#acesso' && route !== '#modulos' && !route.startsWith('#admin')
   const page = route === '#acesso' ? <AuthPortal /> : route === '#modulos' ? <ModuleHub /> : route.startsWith('#admin') ? <AdminDashboard /> : <LandingPage />
-  return <>{page}<ThemeToggle /></>
+  return <>{page}{!isLanding && <ThemeToggle />}</>
 }
 
 export default App

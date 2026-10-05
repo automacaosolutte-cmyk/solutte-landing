@@ -5,7 +5,9 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import { get, put } from '@vercel/blob'
 import { normalizeFileIndexDepartment } from '../lib/file-index.js'
+import { executeInferenceWithTelemetry } from '../lib/izza-inference.js'
 import { createIzzaWorkSessionMiddleware, issueIzzaWorkSession } from '../lib/izza-work-session.js'
+import { conservativeDocumentRuleUpdate, findCompatibleDocumentRule } from '../lib/document-rule-learning.js'
 
 const databaseUrl = process.env.TURSO_DATABASE_URL
 const authToken = process.env.TURSO_AUTH_TOKEN
@@ -36,7 +38,9 @@ function initializeSchema() {
       )`,
       `CREATE TABLE IF NOT EXISTS token_usage (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, agent_id TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
-        output_tokens INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        output_tokens INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        device_id TEXT, model TEXT, origin TEXT, reason_for_ai TEXT, cached_input_tokens INTEGER,
+        duration_ms INTEGER, status TEXT, openai_request_id TEXT
       )`,
       `CREATE TABLE IF NOT EXISTS execution_logs (
         id TEXT PRIMARY KEY, user_id TEXT, agent_id TEXT, event_type TEXT NOT NULL,
@@ -436,15 +440,21 @@ const responseOutputText = (response) => {
   return ''
 }
 
-async function interpretIzzaRequestWithAI(userId, query) {
+async function interpretIzzaRequestWithAI(userId, query, telemetry = {}) {
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY não configurada.')
   const model = process.env.OPENAI_IZZA_MODEL || 'gpt-5-mini'
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const requestId = id()
+  const startedAt = Date.now()
+  let response = null
+  let payload = {}
+  const output = await executeInferenceWithTelemetry({
+    infer: async () => {
+      response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
       model, store: false, max_output_tokens: 250,
-      instructions: `Você interpreta pedidos de busca de documentos do Organizza. Não responda perguntas e não invente dados. Extraia somente o que o usuário escreveu; você recebe apenas a pergunta, nunca documentos ou registros. Use intent=find_document para um documento, list_documents para conjunto/lista e open_folder quando pedirem para abrir uma pasta. Use mode=list para listas, plurais, intervalos e últimos meses; use mode=find para um documento específico. Normalize nomes comuns de documentos para o tipo correspondente quando claro (por exemplo, guia do Simples = DAS). Normalize competências como MMAAAA. Para uma lista explícita, preencha competences sem calcular períodos relativos. Para intervalo, preencha competenceStart e competenceEnd. Para “últimos N meses”, preencha recentMonths e deixe o calendário para o código local. Use temporalMode para distinguir single, explicit, range, recent, recent_closed e latest_available; temporalCount guarda somente o N semanticamente solicitado. Use sort=latest_competence para “último documento” e sort=latest_indexed para “último arquivo inserido/alterado”. Normalize o setor como contabil, fiscal, pessoal ou juridico. Hoje é ${new Date().toISOString().slice(0, 10)}.`,
+      instructions: `Você interpreta pedidos de busca de documentos do Organizza. Não responda perguntas e não invente dados. Extraia somente o que o usuário escreveu; você recebe apenas a pergunta, nunca documentos ou registros. Use intent=find_document para um documento, list_documents para conjunto/lista e open_folder quando pedirem para abrir uma pasta. Use mode=list para listas, plurais, intervalos e últimos meses; use mode=find para um documento específico. Normalize nomes comuns de documentos para o tipo correspondente quando claro (por exemplo, guia do Simples = DAS). Normalize competências como MMAAAA. Para uma lista explícita, preencha competences sem calcular períodos relativos. Para intervalo, preencha competenceStart e competenceEnd. Para “últimos N meses”, preencha recentMonths e deixe o calendário para o código local. Use all_available para todos os documentos disponíveis, month_across_years para um mês em todos os anos, year_all para todos de um ano e month_year_range para um mês dentro de um intervalo de anos. Use temporalMode para distinguir single, explicit, range, recent, recent_closed, latest_available, all_available, month_across_years, year_all e month_year_range; temporalCount guarda somente o N semanticamente solicitado. Use sort=latest_competence para “último documento” e sort=latest_indexed para “último arquivo inserido/alterado”. Normalize o setor como contabil, fiscal, pessoal ou juridico. Hoje é ${new Date().toISOString().slice(0, 10)}.`,
       input: query,
       text: { format: {
         type: 'json_schema', name: 'organizza_document_search', strict: true,
@@ -460,25 +470,40 @@ async function interpretIzzaRequestWithAI(userId, query) {
             competenceStart: { type: 'string', description: 'Início do intervalo em MMAAAA ou string vazia.' },
             competenceEnd: { type: 'string', description: 'Fim do intervalo em MMAAAA ou string vazia.' },
             recentMonths: { type: 'integer', minimum: 0, maximum: 36 },
-            temporalMode: { type: 'string', enum: ['', 'single', 'explicit', 'range', 'recent', 'recent_closed', 'latest_available'] },
+            temporalMode: { type: 'string', enum: ['', 'single', 'explicit', 'range', 'recent', 'recent_closed', 'latest_available', 'all_available', 'month_across_years', 'year_all', 'month_year_range'] },
             temporalCount: { type: 'integer', minimum: 0, maximum: 36 },
+            month: { type: 'integer', minimum: 0, maximum: 12 },
+            year: { type: 'integer', minimum: 0, maximum: 2099 },
+            yearStart: { type: 'integer', minimum: 0, maximum: 2099 },
+            yearEnd: { type: 'integer', minimum: 0, maximum: 2099 },
             sort: { type: 'string', enum: ['', 'latest_competence', 'latest_indexed'] },
             mode: { type: 'string', enum: ['find', 'list'] },
             department: { type: 'string', enum: ['', 'contabil', 'fiscal', 'pessoal', 'juridico'] },
           },
-          required: ['intent', 'clientReference', 'documentDescription', 'documentType', 'competence', 'competences', 'competenceStart', 'competenceEnd', 'recentMonths', 'temporalMode', 'temporalCount', 'sort', 'mode', 'department'],
+          required: ['intent', 'clientReference', 'documentDescription', 'documentType', 'competence', 'competences', 'competenceStart', 'competenceEnd', 'recentMonths', 'temporalMode', 'temporalCount', 'month', 'year', 'yearStart', 'yearEnd', 'sort', 'mode', 'department'],
         },
       } },
-    }),
+        }),
+      })
+      payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(`OpenAI ${response.status}: ${asText(payload?.error?.message || 'falha na interpretação')}`)
+      return JSON.parse(responseOutputText(payload) || '{}')
+    },
+    writeTelemetry: async ({ inferenceError }) => {
+      const usage = payload?.usage || {}
+      await db.execute({
+        sql: `INSERT INTO token_usage (id, user_id, agent_id, input_tokens, output_tokens, device_id, model, origin, reason_for_ai,
+          cached_input_tokens, duration_ms, status, openai_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [requestId, userId, 'izza', asNumber(usage.input_tokens), asNumber(usage.output_tokens), asText(telemetry.deviceId), model,
+          asText(telemetry.origin || 'desktop_izza_interpret'), asText(telemetry.reasonForAi || 'semantic_ambiguity'),
+          asNumber(usage?.input_tokens_details?.cached_tokens), Date.now() - startedAt, inferenceError ? 'error' : 'success',
+          asText(response?.headers?.get?.('x-request-id') || payload?._request_id)],
+      })
+    },
+    logTelemetryFailure: ({ inferenceStatus }) => console.error(JSON.stringify({
+      level: 'error', event: 'izza.openai.telemetry_write_failed', inferenceRequestId: requestId, inferenceStatus,
+    })),
   })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(`OpenAI ${response.status}: ${asText(payload?.error?.message || 'falha na interpretação')}`)
-  const usage = payload?.usage || {}
-  await db.execute({
-    sql: 'INSERT INTO token_usage (id, user_id, agent_id, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?)',
-    args: [id(), userId, 'izza', asNumber(usage.input_tokens), asNumber(usage.output_tokens)],
-  })
-  const output = JSON.parse(responseOutputText(payload) || '{}')
   return {
     query: [output.clientReference, output.documentDescription, output.documentType, output.competence, output.department].map(asText).filter(Boolean).join(' '),
     intent: ['find_document', 'list_documents', 'open_folder'].includes(output.intent) ? output.intent : 'find_document',
@@ -486,7 +511,8 @@ async function interpretIzzaRequestWithAI(userId, query) {
       clientReference: asText(output.clientReference), documentDescription: asText(output.documentDescription), documentType: asText(output.documentType), competence: asText(output.competence),
       competences: (Array.isArray(output.competences) ? output.competences : []).map(asText).filter((item) => /^(0[1-9]|1[0-2])20\d{2}$/.test(item)).slice(0, 36),
       competenceStart: asText(output.competenceStart), competenceEnd: asText(output.competenceEnd), recentMonths: Math.max(0, Math.min(36, asNumber(output.recentMonths))),
-      temporalMode: ['', 'single', 'explicit', 'range', 'recent', 'recent_closed', 'latest_available'].includes(output.temporalMode) ? output.temporalMode : '', temporalCount: Math.max(0, Math.min(36, asNumber(output.temporalCount))),
+      temporalMode: ['', 'single', 'explicit', 'range', 'recent', 'recent_closed', 'latest_available', 'all_available', 'month_across_years', 'year_all', 'month_year_range'].includes(output.temporalMode) ? output.temporalMode : '', temporalCount: Math.max(0, Math.min(36, asNumber(output.temporalCount))),
+      month: Math.max(0, Math.min(12, asNumber(output.month))), year: asNumber(output.year), yearStart: asNumber(output.yearStart), yearEnd: asNumber(output.yearEnd),
       sort: ['latest_competence', 'latest_indexed'].includes(output.sort) ? output.sort : '', department: asText(output.department),
     },
     mode: output.mode === 'list' ? 'list' : 'find', model,
@@ -1078,7 +1104,21 @@ app.post('/api/organizza/rules', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Informe um nome, ao menos um termo e um departamento válido.' })
     }
     if (destinationPath.split('/').some((segment) => segment === '..')) return res.status(400).json({ error: 'O destino relativo não pode conter ..' })
-    const rule = { id: id(), userId: asText(req.user.id), name: name.trim().slice(0, 120), terms, department, destinationPath }
+    const userId = asText(req.user.id)
+    const compatibleRules = await many('SELECT * FROM organiza_rules WHERE user_id = ? AND department = ? ORDER BY created_at ASC LIMIT 501', [userId, department])
+    if (compatibleRules.length > 500) return res.status(409).json({ error: 'Há regras demais neste departamento para aprender com segurança. Revise o catálogo antes de continuar.' })
+    const existing = findCompatibleDocumentRule(compatibleRules, { name, terms })
+    if (existing) {
+      const safeUpdate = conservativeDocumentRuleUpdate(existing, { terms, destinationPath })
+      await db.execute({
+        sql: 'UPDATE organiza_rules SET terms = ?, destination_path = ?, active = 1, updated_at = ? WHERE id = ? AND user_id = ?',
+        args: [JSON.stringify(safeUpdate.terms), safeUpdate.destinationPath, now(), asText(existing.id), userId],
+      })
+      const persisted = publicRule(await one('SELECT * FROM organiza_rules WHERE id = ? AND user_id = ?', [asText(existing.id), userId]))
+      await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), userId, 'rules.reused', 'success', `Regra "${persisted.name}" reutilizada pelo Organizza.`, JSON.stringify({ ruleId: persisted.id, department: persisted.department, termsPreserved: safeUpdate.terms.length > 0 })] })
+      return res.json({ rule: persisted, reused: true })
+    }
+    const rule = { id: id(), userId, name: name.trim().slice(0, 120), terms, department, destinationPath }
     await db.execute({ sql: 'INSERT INTO organiza_rules (id, user_id, name, terms, department, destination_path, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [rule.id, rule.userId, rule.name, JSON.stringify(rule.terms), rule.department, rule.destinationPath, now()] })
     await db.execute({ sql: 'INSERT INTO organiza_events (id, user_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?)', args: [id(), rule.userId, 'rules.created', 'success', `Regra "${rule.name}" criada para o Organizza.`, JSON.stringify({ ruleId: rule.id, department: rule.department, terms: rule.terms })] })
     res.status(201).json({ rule: publicRule(await one('SELECT * FROM organiza_rules WHERE id = ?', [rule.id])) })
@@ -1106,7 +1146,9 @@ app.delete('/api/organizza/pending-files/:id', requireAuth, async (req, res, nex
     const pending = await one("SELECT * FROM organiza_pending_files WHERE id = ? AND user_id = ? AND status = 'pending'", [req.params.id, asText(req.user.id)])
     if (!pending) return res.status(404).json({ error: 'A pendência não existe mais ou já está sendo processada.' })
     await db.batch([
-      { sql: 'DELETE FROM organiza_pending_files WHERE id = ?', args: [asText(pending.id)] },
+      // Mantém uma marca de descarte para impedir que a sincronização periódica
+      // recrie a mesma pendência enquanto o arquivo físico estiver em nprocessados.
+      { sql: "UPDATE organiza_pending_files SET status = 'resolved', destination_path = '__DISMISSED__', resolved_at = ?, updated_at = ? WHERE id = ?", args: [now(), now(), asText(pending.id)] },
       { sql: 'INSERT INTO organiza_events (id, user_id, device_id, event_type, status, message, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [id(), asText(req.user.id), asText(pending.device_id), 'file.pending_removed', 'info', `${asText(pending.file_name)} foi removido da fila de classificação.`, JSON.stringify({ pendingFileId: asText(pending.id), relativePath: asText(pending.relative_path), physicalFileDeleted: false })] },
     ], 'write')
     res.json({ ok: true })
@@ -1136,6 +1178,8 @@ app.post('/api/organizza/pending-files', requireDeviceAuth, async (req, res, nex
     const detectedCompetence = typeof req.body?.detectedCompetence === 'string' ? req.body.detectedCompetence.replace(/\D/g, '').slice(0, 6) : ''
     if (!fileName || !relativePath || !reason || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return res.status(400).json({ error: 'Dados do arquivo pendente são inválidos.' })
     const client = detectedClientId ? await one('SELECT id FROM organiza_clients WHERE id = ? AND user_id = ?', [detectedClientId, asText(req.user.id)]) : null
+    const dismissed = await one("SELECT * FROM organiza_pending_files WHERE user_id = ? AND device_id = ? AND file_name = ? AND relative_path = ? AND status = 'resolved' AND destination_path = '__DISMISSED__' ORDER BY updated_at DESC LIMIT 1", [asText(req.user.id), asText(req.device.id), fileName, relativePath])
+    if (dismissed) return res.json({ pendingFile: null, alreadyRegistered: true, dismissed: true })
     const existing = await one("SELECT * FROM organiza_pending_files WHERE user_id = ? AND device_id = ? AND file_name = ? AND relative_path = ? AND status IN ('pending', 'resolution_requested') ORDER BY created_at DESC LIMIT 1", [asText(req.user.id), asText(req.device.id), fileName, relativePath])
     if (existing) return res.json({ pendingFile: publicPendingFile(existing), alreadyRegistered: true })
     const pendingId = id()
@@ -1355,7 +1399,7 @@ async function searchWithIzza(req, res, next) {
     let searchMode = /\b(QUAIS|LISTE|LISTAR|TODOS|TODAS|DOCUMENTOS|ARQUIVOS|RELATORIOS)\b/.test(normalizeSearchText(query)) ? 'list' : 'find'
     if (process.env.OPENAI_API_KEY && !isClearlyStructuredIzzaRequest(query)) {
       try {
-        const interpretation = await interpretIzzaRequestWithAI(userId, query)
+        const interpretation = await interpretIzzaRequestWithAI(userId, query, { origin: 'legacy_izza_search', reasonForAi: 'legacy_unstructured' })
         if (interpretation.query) { query = interpretation.query; searchMode = interpretation.mode; aiFilters = interpretation.filters; aiInterpreted = true }
       } catch (error) {
         console.error('[Izza AI fallback]', error)
@@ -1654,9 +1698,11 @@ app.post('/api/organizza/izza/work-session', requireDeviceAuth, (req, res) => {
 // Interpreta somente a pergunta; a Work Session é validada localmente, sem SELECTs de autenticação.
 app.post('/api/organizza/izza/interpret', requireIzzaWorkSession, async (req, res) => {
   const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 500) : ''
+  const allowedReasons = new Set(['semantic_ambiguity', 'unknown_document_expression', 'temporal_language_ambiguity', 'action_ambiguity'])
+  const reasonForAi = allowedReasons.has(req.body?.reasonForAi) ? req.body.reasonForAi : 'semantic_ambiguity'
   if (query.length < 2) return res.status(400).json({ error: 'Escreva ao menos dois caracteres para a Izza interpretar.' })
   try {
-    const interpretation = await interpretIzzaRequestWithAI(asText(req.user.id), query)
+    const interpretation = await interpretIzzaRequestWithAI(asText(req.user.id), query, { deviceId: asText(req.device.id), origin: 'desktop_izza_interpret', reasonForAi })
     return res.json({
       intent: interpretation.intent,
       filters: interpretation.filters,
@@ -1898,6 +1944,28 @@ app.post('/api/organizza/izza/learning/start', requireAuth, async (req, res, nex
     const learningId = id()
     await db.execute({ sql: 'INSERT INTO organiza_izza_learning_sessions (id, user_id, query) VALUES (?, ?, ?)', args: [learningId, asText(req.user.id), query] })
     res.status(201).json({ learningId })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/izza/learning/confirm', requireAuth, async (req, res, next) => {
+  try {
+    const learningId = asText(req.body?.learningId)
+    const documentType = asText(req.body?.documentType).trim().slice(0, 120)
+    const department = ['contabil', 'fiscal', 'pessoal', 'juridico'].includes(req.body?.department) ? asText(req.body.department) : ''
+    if (!learningId || !documentType) return res.status(400).json({ error: 'A confirmação do aprendizado está incompleta.' })
+    const session = await one("SELECT id, query FROM organiza_izza_learning_sessions WHERE id = ? AND user_id = ? AND status = 'pending'", [learningId, asText(req.user.id)])
+    if (!session) return res.status(404).json({ error: 'A sessão de aprendizado não está mais disponível.' })
+    const phrase = learningSignature(session.query)
+    if (!phrase) {
+      await db.execute({ sql: "UPDATE organiza_izza_learning_sessions SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP WHERE id = ?", args: [learningId] })
+      return res.json({ learned: false })
+    }
+    await db.batch([
+      { sql: `INSERT INTO organiza_izza_learnings (id, user_id, phrase, document_type, department) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, phrase, document_type, department) DO UPDATE SET confirmations = confirmations + 1, updated_at = CURRENT_TIMESTAMP`, args: [id(), asText(req.user.id), phrase, documentType, department] },
+      { sql: "UPDATE organiza_izza_learning_sessions SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP WHERE id = ?", args: [learningId] },
+    ], 'write')
+    res.json({ learned: true })
   } catch (error) { next(error) }
 })
 
