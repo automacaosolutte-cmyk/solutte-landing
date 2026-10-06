@@ -5,6 +5,7 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import { get, put } from '@vercel/blob'
 import { normalizeFileIndexDepartment } from '../lib/file-index.js'
+import { buildFileIndexLookupQuery } from '../lib/file-index-lookup.js'
 import { executeInferenceWithTelemetry } from '../lib/izza-inference.js'
 import { createIzzaWorkSessionMiddleware, issueIzzaWorkSession } from '../lib/izza-work-session.js'
 import { conservativeDocumentRuleUpdate, findCompatibleDocumentRule } from '../lib/document-rule-learning.js'
@@ -1319,6 +1320,18 @@ app.get('/api/organizza/file-index/shared-map', requireDeviceAuth, async (req, r
       return { revision: asNumber(change.revision), relativePath: asText(change.relativePath), operation: asText(change.operation), file: payload }
     }), canIndexMap, nextCursor: changes.length ? { revision: asNumber(changes.at(-1).revision), relativePath: asText(changes.at(-1).relativePath) } : null, done: changes.length < 500 })
   } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/file-index/lookup', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const query = buildFileIndexLookupQuery(userId, req.body || {})
+    const rows = await many(query.sql, query.args)
+    res.json({ files: rows, limit: query.filters.limit, truncated: rows.length >= query.filters.limit })
+  } catch (error) {
+    if (error instanceof Error && /obrigatório|Informe tipo documental/.test(error.message)) return res.status(400).json({ error: error.message })
+    next(error)
+  }
 })
 
 // Compatibilidade com versões antigas do Desktop: não consultar o índice nem iniciar extração financeira.
