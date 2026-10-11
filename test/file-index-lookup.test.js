@@ -5,7 +5,8 @@ import { buildFileIndexLookupQuery, normalizeFileIndexLookup } from '../lib/file
 
 function explain(input) {
   const db = new DatabaseSync(':memory:')
-  db.exec(`CREATE TABLE organiza_shared_file_index (user_id TEXT, relative_path TEXT, file_name TEXT, client_id TEXT,
+  db.exec(`CREATE TABLE organiza_shared_file_index (user_id TEXT, relative_path TEXT, parent_relative_path TEXT,
+    node_type TEXT NOT NULL DEFAULT 'file', file_name TEXT, client_id TEXT,
     file_hash TEXT, document_type TEXT, department TEXT, competence_year INTEGER, competence_month INTEGER, indexed_at TEXT,
     PRIMARY KEY(user_id, relative_path));
     CREATE TABLE organiza_clients (id TEXT PRIMARY KEY, user_id TEXT, code TEXT, legal_name TEXT, cnpj TEXT);

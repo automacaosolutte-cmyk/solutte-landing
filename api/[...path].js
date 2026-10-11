@@ -67,6 +67,7 @@ function initializeSchema() {
       )`,
       `CREATE TABLE IF NOT EXISTS organiza_shared_file_index (
         user_id TEXT NOT NULL, relative_path TEXT NOT NULL, file_name TEXT NOT NULL, client_id TEXT,
+        parent_relative_path TEXT NOT NULL DEFAULT '', node_type TEXT NOT NULL DEFAULT 'file',
         file_hash TEXT NOT NULL DEFAULT '', document_type TEXT NOT NULL DEFAULT '', department TEXT NOT NULL DEFAULT '',
         competence_year INTEGER, competence_month INTEGER, indexed_at TEXT NOT NULL,
         PRIMARY KEY (user_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id)
@@ -80,6 +81,15 @@ function initializeSchema() {
         operation TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
         payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
         PRIMARY KEY (user_id, relative_path), FOREIGN KEY (user_id) REFERENCES users(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS organiza_map_reconciliations (
+        user_id TEXT NOT NULL, migration_key TEXT NOT NULL, selected_device_id TEXT NOT NULL,
+        requested_by_user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', checkpoint TEXT NOT NULL DEFAULT '{}', last_batch_id TEXT NOT NULL DEFAULT '',
+        scanned_count INTEGER NOT NULL DEFAULT 0, added_count INTEGER NOT NULL DEFAULT 0,
+        updated_count INTEGER NOT NULL DEFAULT 0, published_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+        PRIMARY KEY (user_id, migration_key), FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (selected_device_id) REFERENCES organiza_devices(id)
       )`,
       `CREATE TABLE IF NOT EXISTS organiza_audit_logs (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
@@ -153,6 +163,7 @@ function initializeSchema() {
       'CREATE INDEX IF NOT EXISTS idx_organiza_files_map_lookup ON organiza_file_index(user_id, client_id, competence_year, competence_month)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_shared_file_map_lookup ON organiza_shared_file_index(user_id, client_id, competence_year, competence_month)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_file_map_changes_revision ON organiza_file_map_changes(user_id, revision, relative_path)',
+      'CREATE INDEX IF NOT EXISTS idx_organiza_map_reconciliation_device ON organiza_map_reconciliations(user_id, selected_device_id, status)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_audit_user_created ON organiza_audit_logs(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_events_user_created ON organiza_events(user_id, created_at DESC)',
       'CREATE INDEX IF NOT EXISTS idx_organiza_commands_device_status ON organiza_commands(device_id, status, created_at)',
@@ -172,11 +183,14 @@ function initializeSchema() {
         "ALTER TABLE organiza_file_index ADD COLUMN sync_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE organiza_file_index ADD COLUMN extracted_data TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE users ADD COLUMN notification_schedule_initialized INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE organiza_shared_file_index ADD COLUMN parent_relative_path TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE organiza_shared_file_index ADD COLUMN node_type TEXT NOT NULL DEFAULT 'file'",
       ]) {
         try { await db.execute(sql) } catch (error) {
           if (!/duplicate|already exists/i.test(String(error))) throw error
         }
       }
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_organiza_shared_file_map_parent ON organiza_shared_file_index(user_id, parent_relative_path, node_type, relative_path)')
     })
   }
   return schemaReady
@@ -219,7 +233,8 @@ async function writeSharedFileMap(userId, files, { forceChanged = false } = {}) 
   const uniqueFiles = [...new Map(files.map((file) => [file.relativePath, file])).values()]
   const tx = await db.transaction('write')
   try {
-    const currentRows = (await tx.execute({ sql: `SELECT relative_path AS relativePath, file_name AS fileName, client_id AS clientId,
+    const currentRows = (await tx.execute({ sql: `SELECT relative_path AS relativePath, parent_relative_path AS parentRelativePath,
+    node_type AS nodeType, file_name AS fileName, client_id AS clientId,
     COALESCE(file_hash, '') AS fileHash, COALESCE(document_type, '') AS documentType, COALESCE(department, '') AS department,
     competence_year AS competenceYear, competence_month AS competenceMonth
     FROM organiza_shared_file_index WHERE user_id = ? AND relative_path IN (${uniqueFiles.map(() => '?').join(',')})`, args: [userId, ...uniqueFiles.map((file) => file.relativePath)] })).rows
@@ -228,7 +243,8 @@ async function writeSharedFileMap(userId, files, { forceChanged = false } = {}) 
       .filter((file) => {
         if (forceChanged) return true
         const current = currentByPath.get(file.relativePath)
-        return !current || asText(current.fileName) !== asText(file.fileName) || asText(current.clientId) !== asText(file.clientId)
+        return !current || asText(current.nodeType || 'file') !== asText(file.nodeType || 'file')
+          || asText(current.parentRelativePath) !== asText(file.parentRelativePath) || asText(current.fileName) !== asText(file.fileName) || asText(current.clientId) !== asText(file.clientId)
           || asText(current.fileHash) !== asText(file.fileHash) || asText(current.documentType) !== asText(file.documentType)
           || asText(current.department) !== asText(file.department) || asNumber(current.competenceYear) !== asNumber(file.competenceYear)
           || asNumber(current.competenceMonth) !== asNumber(file.competenceMonth)
@@ -245,12 +261,13 @@ async function writeSharedFileMap(userId, files, { forceChanged = false } = {}) 
     for (let start = 0; start < changedFiles.length; start += 200) {
       const batchFiles = changedFiles.slice(start, start + 200)
       await tx.batch(batchFiles.flatMap((file) => [
-        { sql: `INSERT INTO organiza_shared_file_index (user_id, relative_path, file_name, client_id, file_hash, document_type, department, competence_year, competence_month, indexed_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(user_id, relative_path) DO UPDATE SET file_name = excluded.file_name, client_id = excluded.client_id,
+        { sql: `INSERT INTO organiza_shared_file_index (user_id, relative_path, parent_relative_path, node_type, file_name, client_id, file_hash, document_type, department, competence_year, competence_month, indexed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, relative_path) DO UPDATE SET parent_relative_path = excluded.parent_relative_path,
+            node_type = excluded.node_type, file_name = excluded.file_name, client_id = excluded.client_id,
             file_hash = excluded.file_hash, document_type = excluded.document_type, department = excluded.department,
             competence_year = excluded.competence_year, competence_month = excluded.competence_month, indexed_at = excluded.indexed_at`,
-        args: [userId, file.relativePath, file.fileName, file.clientId, file.fileHash, file.documentType, normalizeFileIndexDepartment(file.department), file.competenceYear, file.competenceMonth, timestamp] },
+        args: [userId, file.relativePath, file.parentRelativePath || '', file.nodeType === 'directory' ? 'directory' : 'file', file.fileName, file.clientId, file.fileHash, file.documentType, normalizeFileIndexDepartment(file.department), file.competenceYear, file.competenceMonth, timestamp] },
         { sql: `INSERT INTO organiza_file_map_changes (user_id, revision, relative_path, operation, payload, created_at) VALUES (?, ?, ?, 'upsert', ?, ?)
           ON CONFLICT(user_id, relative_path) DO UPDATE SET revision = excluded.revision, operation = excluded.operation, payload = excluded.payload, created_at = excluded.created_at`,
           args: [userId, revision, file.relativePath, JSON.stringify({ ...file, ...(clientsById.get(asText(file.clientId)) || {}), indexedAt: timestamp }), timestamp] },
@@ -316,10 +333,14 @@ async function writeSharedFileMapDeletes(userId, relativePaths) {
   if (!relativePaths.length) return 0
   const tx = await db.transaction('write')
   try {
+    const uniquePaths = [...new Set(relativePaths)]
+    const existing = (await tx.execute({ sql: `SELECT relative_path AS relativePath FROM organiza_shared_file_index
+      WHERE user_id = ? AND relative_path IN (${uniquePaths.map(() => '?').join(',')})`, args: [userId, ...uniquePaths] })).rows.map((row) => asText(row.relativePath))
+    if (!existing.length) { await tx.commit(); return 0 }
     const revision = await bumpSharedFileMapRevision(tx, userId)
     const timestamp = now()
-    for (let start = 0; start < relativePaths.length; start += 200) {
-      const batchPaths = relativePaths.slice(start, start + 200)
+    for (let start = 0; start < existing.length; start += 200) {
+      const batchPaths = existing.slice(start, start + 200)
       await tx.batch(batchPaths.flatMap((relativePath) => [
         { sql: 'DELETE FROM organiza_shared_file_index WHERE user_id = ? AND relative_path = ?', args: [userId, relativePath] },
         { sql: `INSERT INTO organiza_file_map_changes (user_id, revision, relative_path, operation, payload, created_at) VALUES (?, ?, ?, 'delete', '{}', ?)
@@ -1249,6 +1270,8 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
     const files = source.map((raw) => {
       const fileName = typeof raw?.fileName === 'string' ? raw.fileName.trim().replace(/[\\/]/g, '').slice(0, 500) : ''
       const relativePath = safeRelativePath(raw?.relativePath)
+      const parentRelativePath = relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : ''
+      const nodeType = raw?.nodeType === 'directory' ? 'directory' : 'file'
       const clientId = typeof raw?.clientId === 'string' && knownClientIds.has(raw.clientId) ? raw.clientId : null
       const department = normalizeFileIndexDepartment(raw?.department)
       const competence = typeof raw?.competence === 'string' ? raw.competence.replace(/\D/g, '') : ''
@@ -1259,7 +1282,7 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
       // O índice guarda metadados de localização; payloads financeiros de versões antigas são ignorados.
       const extractedData = '{}'
       if (!fileName || !relativePath) throw new Error('Um item do índice não possui nome ou caminho relativo válido.')
-      return { fileName, relativePath, clientId, department, competenceMonth, competenceYear, documentType, fileHash, extractedData }
+      return { fileName, relativePath, parentRelativePath, nodeType, clientId, department, competenceMonth, competenceYear, documentType, fileHash, extractedData }
     })
     await db.batch(files.map((file) => ({
       sql: `INSERT INTO organiza_file_index (id, user_id, device_id, client_id, file_name, relative_path, file_hash, document_type, department, competence_year, competence_month, extracted_data, indexed_at, sync_id)
@@ -1271,6 +1294,36 @@ app.post('/api/organizza/file-index', requireDeviceAuth, async (req, res, next) 
     res.status(201).json({ indexed: files.length, sharedRevision: revision })
   } catch (error) {
     if (error instanceof Error && /índice/i.test(error.message)) return res.status(400).json({ error: error.message })
+    next(error)
+  }
+})
+
+app.post('/api/organizza/file-index/changes', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const source = Array.isArray(req.body?.changes) ? req.body.changes.slice(0, 100) : []
+    if (!source.length) return res.status(400).json({ error: 'Informe ao menos uma alteração do mapa.' })
+    const upserts = []
+    const removals = []
+    for (const raw of source) {
+      const operation = asText(raw?.operation)
+      const relativePath = safeRelativePath(raw?.relativePath || raw?.file?.relativePath)
+      if (operation === 'remove') { removals.push(relativePath); continue }
+      if (!['add', 'update'].includes(operation)) throw new Error('Operação do mapa inválida.')
+      const file = raw?.file || {}
+      const fileName = asText(file.fileName).trim().replace(/[\\/]/g, '').slice(0, 500)
+      if (!fileName) throw new Error('Nó do mapa sem nome.')
+      upserts.push({ relativePath, parentRelativePath: relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : '',
+        nodeType: file.nodeType === 'directory' ? 'directory' : 'file', fileName, clientId: asText(file.clientId) || null,
+        fileHash: asText(file.fileHash).slice(0, 120), documentType: asText(file.documentType).slice(0, 120),
+        department: normalizeFileIndexDepartment(file.department), competenceYear: asNumber(file.competenceYear) || null,
+        competenceMonth: asNumber(file.competenceMonth) || null })
+    }
+    let revision = upserts.length ? await writeSharedFileMap(userId, upserts) : 0
+    if (removals.length) revision = await writeSharedFileMapDeletes(userId, [...new Set(removals)])
+    res.status(201).json({ accepted: source.length, upserts: upserts.length, removed: removals.length, sharedRevision: revision })
+  } catch (error) {
+    if (error instanceof Error && /inválid|sem nome|Informe/.test(error.message)) return res.status(400).json({ error: error.message })
     next(error)
   }
 })
@@ -1289,7 +1342,8 @@ app.get('/api/organizza/file-index/shared-map', requireDeviceAuth, async (req, r
     const sinceRaw = req.query.sinceRevision
     if (sinceRaw == null || sinceRaw === '') {
       const after = safeRelativePath(asText(req.query.after))
-      const rows = await many(`SELECT f.relative_path AS relativePath, f.file_name AS fileName, f.client_id AS clientId,
+      const rows = await many(`SELECT f.relative_path AS relativePath, f.parent_relative_path AS parentRelativePath,
+        f.node_type AS nodeType, f.file_name AS fileName, f.client_id AS clientId,
         f.file_hash AS fileHash, f.document_type AS documentType, f.department,
         f.competence_year AS competenceYear, f.competence_month AS competenceMonth, f.indexed_at AS indexedAt,
         c.code, c.legal_name AS legalName, c.cnpj
@@ -1330,6 +1384,80 @@ app.post('/api/organizza/file-index/lookup', requireDeviceAuth, async (req, res,
     res.json({ files: rows, limit: query.filters.limit, truncated: rows.length >= query.filters.limit })
   } catch (error) {
     if (error instanceof Error && /obrigatório|Informe tipo documental/.test(error.message)) return res.status(400).json({ error: error.message })
+    next(error)
+  }
+})
+
+const STRUCTURAL_RECONCILIATION_KEY = 'structural-v1'
+
+app.post('/api/organizza/file-map/reconciliation/start', requireDeviceAuth, async (req, res, next) => {
+  try {
+    if (!requireWorkspaceAdminDevice(req, res)) return
+    const userId = asText(req.user.id)
+    const selectedDeviceId = asText(req.body?.selectedDeviceId || req.device.id).trim()
+    const selected = await one("SELECT id FROM organiza_devices WHERE id = ? AND user_id = ? AND status != 'revoked'", [selectedDeviceId, userId])
+    if (!selected) return res.status(400).json({ error: 'O computador escolhido não pertence a este workspace.' })
+    const existing = await one('SELECT status FROM organiza_map_reconciliations WHERE user_id = ? AND migration_key = ?', [userId, STRUCTURAL_RECONCILIATION_KEY])
+    if (asText(existing?.status) === 'completed') return res.status(409).json({ error: 'A reconciliação estrutural inicial deste workspace já foi concluída.' })
+    const timestamp = now()
+    await db.execute({ sql: `INSERT INTO organiza_map_reconciliations
+      (user_id, migration_key, selected_device_id, requested_by_user_id, status, checkpoint, started_at, updated_at)
+      VALUES (?, ?, ?, ?, 'running', '{}', ?, ?)
+      ON CONFLICT(user_id, migration_key) DO UPDATE SET selected_device_id=excluded.selected_device_id,
+        requested_by_user_id=excluded.requested_by_user_id, status='running', last_error='', updated_at=excluded.updated_at`,
+    args: [userId, STRUCTURAL_RECONCILIATION_KEY, selectedDeviceId, asText(req.device.actor_user_id), timestamp, timestamp] })
+    res.status(201).json({ migrationKey: STRUCTURAL_RECONCILIATION_KEY, selectedDeviceId, status: 'running' })
+  } catch (error) { next(error) }
+})
+
+app.get('/api/organizza/file-map/reconciliation/status', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const row = await one(`SELECT migration_key AS migrationKey, selected_device_id AS selectedDeviceId, status,
+      checkpoint, scanned_count AS scanned, added_count AS added, updated_count AS updated,
+      published_count AS published, last_error AS lastError, started_at AS startedAt,
+      updated_at AS updatedAt, completed_at AS completedAt
+      FROM organiza_map_reconciliations WHERE user_id = ? AND migration_key = ?`, [asText(req.user.id), STRUCTURAL_RECONCILIATION_KEY])
+    res.json({ reconciliation: row || null })
+  } catch (error) { next(error) }
+})
+
+app.post('/api/organizza/file-map/reconciliation/batch', requireDeviceAuth, async (req, res, next) => {
+  try {
+    const userId = asText(req.user.id)
+    const state = await one('SELECT * FROM organiza_map_reconciliations WHERE user_id = ? AND migration_key = ?', [userId, STRUCTURAL_RECONCILIATION_KEY])
+    if (!state || asText(state.status) !== 'running') return res.status(409).json({ error: 'A reconciliação estrutural não está ativa.' })
+    if (asText(state.selected_device_id) !== asText(req.device.id)) return res.status(403).json({ error: 'Este não é o computador selecionado para a reconciliação.' })
+    const batchId = asText(req.body?.batchId).trim().slice(0, 100)
+    if (!batchId) return res.status(400).json({ error: 'batchId é obrigatório.' })
+    if (asText(state.last_batch_id) === batchId) return res.json({ duplicated: true, status: asText(state.status) })
+    const source = Array.isArray(req.body?.nodes) ? req.body.nodes.slice(0, 100) : []
+    const files = source.map((raw) => {
+      const relativePath = safeRelativePath(raw?.relativePath)
+      const fileName = asText(raw?.fileName).trim().replace(/[\\/]/g, '').slice(0, 500)
+      if (!relativePath || !fileName) throw new Error('Nó estrutural inválido.')
+      const nodeType = raw?.nodeType === 'directory' ? 'directory' : 'file'
+      const parentRelativePath = relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : ''
+      const operation = asText(raw?.operation || 'add')
+      if (operation === 'update' && raw?.confirmed !== true) throw new Error('UPDATE estrutural exige confirmação explícita.')
+      if (!['add', 'update'].includes(operation)) throw new Error('A reconciliação inicial aceita somente ADD e UPDATE confirmado.')
+      return { relativePath, parentRelativePath, nodeType, fileName, clientId: asText(raw?.clientId) || null,
+        fileHash: asText(raw?.fileHash).slice(0, 120), documentType: asText(raw?.documentType).slice(0, 120),
+        department: normalizeFileIndexDepartment(raw?.department), competenceYear: asNumber(raw?.competenceYear) || null,
+        competenceMonth: asNumber(raw?.competenceMonth) || null, operation }
+    })
+    const revision = files.length ? await writeSharedFileMap(userId, files) : 0
+    const done = req.body?.done === true
+    const checkpoint = JSON.stringify(req.body?.checkpoint && typeof req.body.checkpoint === 'object' ? req.body.checkpoint : {}).slice(0, 200_000)
+    const added = files.filter((file) => file.operation === 'add').length
+    const updated = files.filter((file) => file.operation === 'update').length
+    await db.execute({ sql: `UPDATE organiza_map_reconciliations SET checkpoint=?, last_batch_id=?,
+      scanned_count=scanned_count+?, added_count=added_count+?, updated_count=updated_count+?,
+      published_count=published_count+?, status=?, completed_at=?, updated_at=?
+      WHERE user_id=? AND migration_key=?`, args: [checkpoint, batchId, asNumber(req.body?.scanned), added, updated,
+      files.length, done ? 'completed' : 'running', done ? now() : null, now(), userId, STRUCTURAL_RECONCILIATION_KEY] })
+    res.json({ accepted: files.length, added, updated, revision, done })
+  } catch (error) {
+    if (error instanceof Error && /obrigat|inválid|exige|aceita/.test(error.message)) return res.status(400).json({ error: error.message })
     next(error)
   }
 })

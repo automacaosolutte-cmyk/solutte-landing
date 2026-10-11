@@ -45,6 +45,15 @@ Endpoints de dispositivo validam token, vínculo dispositivo/usuário e estado a
 - O hash de arquivo usado pelo Desktop é `tamanho:mtime arredondado`, não hash criptográfico.
 - `P0.1 — AUDITORIA DE PENDÊNCIAS/POLLING`: pendências e `pendingWebRegistrations` ainda possuem sincronização a cada 30 segundos; revisar limite de retries e concorrência antes da produção.
 
+## Mapa estrutural e reconciliação inicial
+
+- `organiza_shared_file_index` mantém `node_type` e `parent_relative_path` por workspace/path. A migration `map:migrate-structural` é aditiva e não apaga ou substitui o mapa compartilhado existente.
+- `organiza_map_reconciliations` guarda uma única execução `structural-v1` por workspace, o dispositivo escolhido, checkpoint, contadores e estado. O início exige dispositivo do administrador fundador validado por `role + actor_user_id`; o e-mail não participa da autorização.
+- O dispositivo escolhido publica no máximo 100 nós por request. Batches possuem identidade e a operação aceita somente ADD ou UPDATE explicitamente confirmado; ausência física nunca é convertida em DELETE.
+- `POST /api/organizza/file-index/changes` drena outbox em lotes máximos de 100 e trata ADD/UPDATE/REMOVE. Escritas continuam transacionais e incrementam revisão somente quando o mapa canônico muda.
+- Depois da reconciliação excepcional, Desktops usam apenas revisão e deltas no startup/login. Não há watcher, polling, varredura periódica, leitura de conteúdo, OpenAI ou envio de documento.
+- Extração PDF, embeddings, política compartilhada persistente de ignore e aprendizado documental avançado permanecem pendentes.
+
 ## Evolução futura: Repository Profile
 
 Somente backlog, não implementado: conhecer a dimensão estrutural do repositório antes de escolher estratégia de scan/reconciliação. Métricas possíveis incluem clientes, pastas, arquivos/documentos, entradas totais, arquivos indexáveis/no mapa, pendências, profundidade, tamanho, taxas de inclusão/alteração/remoção, duração e páginas/deltas/Rows Read/Rows Written quando mensuráveis. Pastas são diretórios; arquivos são documentos; entradas totais são pastas + arquivos. Não criar scan periódico para atualizar métricas: scan completo serve para conhecimento/reconciliação quando necessário e eventos mantêm o estado normal. O teto atual de 100.000 é temporário e não define capacidade futura.
