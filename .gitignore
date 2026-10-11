@@ -3,3 +3,9 @@ dist/
 .DS_Store
 *.tsbuildinfo
 .image-work/
+server/.env
+server/data/
+.env.local
+.vercel/
+.vercel
+.env*
